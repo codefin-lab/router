@@ -1,0 +1,135 @@
+---
+title: Router Environment Variable Configuration Reference
+subtitle: ""
+description: Reference of YAML configuration properties for Apollo GraphOS Router and Apollo Router Core.
+---
+
+This reference covers the environment variables for configuring an Apollo Router. 
+
+## Environment variables
+
+This section lists and describes the environment variables you can set when running the `router` binary. 
+
+<Tip>
+
+These environment variables apply only if your supergraph schema is managed by GraphOS.
+
+</Tip>
+
+<Tip>
+
+When running Apollo Router locally with a schema fetched from Uplink, the API key must have at least the Observer role; keys with lower privileges cannot retrieve the schema.
+
+</Tip>
+
+<table class="field-table api-ref">
+  <thead>
+    <tr>
+      <th>Environment Variable</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+
+<tbody>
+<tr class="required">
+<td style="min-width: 150px;">
+
+##### `APOLLO_GRAPH_REF`
+
+</td>
+<td>
+
+The graph ref for the GraphOS graph and variant that the router fetches its supergraph schema from (e.g., `docs-example-graph@staging`).
+
+**Required** when using [managed federation](/federation/managed-federation/overview/), except when using an [offline license](/graphos/routing/license/#offline-license) to run the router.
+
+</td>
+</tr>
+<tr class="required">
+<td style="min-width: 150px;">
+
+##### `APOLLO_KEY`
+
+</td>
+<td>
+
+The [graph API key](/graphos/api-keys/#graph-api-keys) that the router should use to authenticate with GraphOS when fetching its supergraph schema.
+
+**Required** when using [managed federation](/federation/managed-federation/overview/), except when using an [offline license](/graphos/routing/license/#offline-license) to run the router or when using `APOLLO_KEY_PATH`.
+
+</td>
+</tr>
+<tr class="required">
+<td style="min-width: 150px;">
+
+##### `APOLLO_KEY_PATH`
+
+</td>
+<td>
+
+⚠️ **This is not available on Windows.**
+
+A path to a file containing the [graph API key](/graphos/api-keys/#graph-api-keys) that the router should use to authenticate with GraphOS when fetching its supergraph schema.
+
+**Required** when using [managed federation](/federation/managed-federation/overview/), except when using an [offline license](/graphos/routing/license/#offline-license) to run the router or when using `APOLLO_KEY`.
+
+</td>
+</tr>
+<tr>
+<td style="min-width: 150px;">
+
+##### `APOLLO_GRAPH_ARTIFACT_REFERENCE`
+
+</td>
+<td>
+
+An OCI reference to a graph artifact that contains the supergraph schema. The reference must use a SHA256 digest format.
+
+When you set this option, the router uses the schema from the specified graph artifact instead of Apollo Uplink. The router still fetches entitlements and persisted queries from Uplink.
+
+For information on finding graph artifact references, see [Graph Artifacts](/graphos/platform/schema-management/delivery/graph-artifacts#find-oci-artifact-references).
+
+</td>
+</tr>
+<tr>
+<td style="min-width: 150px;">
+
+##### `APOLLO_GRAPH_ARTIFACT_UNSECURE_HOSTS`
+
+</td>
+<td>
+
+A comma-separated list of registry hostnames to use HTTP instead of HTTPS when fetching graph artifacts.
+
+<br/><br/>
+
+When this variable is not set, Router defaults to allowing HTTP for `localhost`, `127.0.0.1`, and `dockerhost`. 
+
+<br/><br/>
+
+When this variable is set to a non-empty value, only the specified hosts use HTTP and the defaults are replaced. For example, to allow HTTP for a custom internal registry and `localhost`:
+
+<br/><br/>
+
+```bash
+APOLLO_GRAPH_ARTIFACT_UNSECURE_HOSTS="internal.registry.corp,localhost"
+```
+
+When this variable is set to an empty string (`""`), all HTTP overrides are disabled, requiring HTTPS for every registry, including localhost.
+
+</td>
+</tr>
+</tbody>
+</table>
+
+## Example command
+
+To use environment variables when running router, you must set them before the `router` command:
+
+```bash title="Using a graph ref"
+APOLLO_KEY="..." APOLLO_GRAPH_REF="..." ./router
+```
+
+```bash title="Using a graph artifact reference"
+APOLLO_KEY="..." APOLLO_GRAPH_ARTIFACT_REFERENCE="artifact.api.apollographql.com/my-graph-a50b9d546b298e5a@sha256:14409db3d8a8d74ff9e9a0b5712c0aa8d574bcacc3656e1bc0c55ecf97cd9264" ./router
+```

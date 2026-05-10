@@ -1,0 +1,216 @@
+mod compose_auth;
+mod compose_basic;
+mod compose_cache_tag;
+mod compose_directive;
+mod compose_directive_sharing;
+mod compose_fed1_subgraphs;
+mod compose_inaccessible;
+mod compose_interface_object;
+mod compose_misc;
+mod compose_set_context;
+mod compose_tag;
+mod compose_type_merging;
+mod compose_types;
+mod compose_upgrade_subgraphs;
+mod compose_validation;
+mod connectors;
+mod demand_control;
+mod directive_argument_merge_strategies;
+mod external;
+mod fed1_shareability;
+mod hints;
+mod override_directive;
+mod subscription;
+mod supergraph_reversibility;
+mod validation_errors;
+
+pub(crate) mod test_helpers {
+    use std::iter::zip;
+
+    use apollo_federation::ValidFederationSubgraphs;
+    use apollo_federation::composition::CompositionFailure;
+    use apollo_federation::composition::CompositionOptions;
+    use apollo_federation::error::CompositionError;
+    use apollo_federation::error::FederationError;
+    use apollo_federation::subgraph::test_utils::remove_indentation;
+    use apollo_federation::subgraph::typestate::Initial;
+    use apollo_federation::subgraph::typestate::Subgraph;
+    use apollo_federation::supergraph::CompositionHint;
+    use apollo_federation::supergraph::Satisfiable;
+    use apollo_federation::supergraph::Supergraph;
+
+    pub(crate) struct ServiceDefinition<'a> {
+        pub(crate) name: &'a str,
+        pub(crate) type_defs: &'a str,
+    }
+
+    /// Thin wrapper around [`apollo_federation::composition::compose`] that passes
+    /// [`CompositionOptions::default()`], so tests don't have to spell it out.
+    pub(crate) fn compose(
+        subgraphs: Vec<Subgraph<Initial>>,
+    ) -> Result<Supergraph<Satisfiable>, CompositionFailure> {
+        apollo_federation::composition::compose(subgraphs, CompositionOptions::default())
+    }
+
+    /// Composes a set of subgraphs as if they had the latest federation 2 spec link in them.
+    /// Also, all federation directives are automatically imported.
+    // PORT_NOTE: This function corresponds to `composeAsFed2Subgraphs` in JS implementation.
+    pub(crate) fn compose_as_fed2_subgraphs(
+        service_list: &[ServiceDefinition<'_>],
+    ) -> Result<Supergraph<Satisfiable>, CompositionFailure> {
+        compose_as_fed2_subgraphs_with_options(service_list, CompositionOptions::default())
+    }
+
+    /// Same as [`compose_as_fed2_subgraphs`], but lets the caller supply
+    /// [`CompositionOptions`]. Use this for tests that exercise non-default options.
+    pub(crate) fn compose_as_fed2_subgraphs_with_options(
+        service_list: &[ServiceDefinition<'_>],
+        options: CompositionOptions,
+    ) -> Result<Supergraph<Satisfiable>, CompositionFailure> {
+        let fed2_subgraphs = as_fed2_subgraphs(service_list)?;
+        apollo_federation::composition::compose(fed2_subgraphs, options)
+    }
+
+    /// Parses the given service definitions and converts them into fed2-ready subgraphs, ready to
+    /// be fed into [`compose`]. Mirrors the `asFed2Service` conversion from the JS implementation.
+    ///
+    /// Use this when a test needs to call [`compose`] directly with custom [`CompositionOptions`].
+    pub(crate) fn as_fed2_subgraphs(
+        service_list: &[ServiceDefinition<'_>],
+    ) -> Result<Vec<Subgraph<Initial>>, Vec<CompositionError>> {
+        let mut subgraphs = Vec::new();
+        let mut errors = Vec::new();
+        for service in service_list {
+            let result = Subgraph::parse(
+                service.name,
+                &format!("http://{}", service.name),
+                service.type_defs,
+            );
+            match result {
+                Ok(subgraph) => {
+                    subgraphs.push(subgraph);
+                }
+                Err(err) => {
+                    errors.extend(err.to_composition_errors());
+                }
+            }
+        }
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+
+        let mut fed2_subgraphs = Vec::new();
+        for subgraph in subgraphs {
+            match subgraph.into_fed2_test_subgraph(true) {
+                Ok(subgraph) => fed2_subgraphs.push(subgraph),
+                Err(err) => errors.extend(err.to_composition_errors()),
+            }
+        }
+        if !errors.is_empty() {
+            return Err(errors);
+        }
+
+        Ok(fed2_subgraphs)
+    }
+
+    /// Helper function to print schema SDL with consistent formatting for snapshots
+    pub(crate) fn print_sdl(schema: &apollo_compiler::Schema) -> String {
+        let mut schema = schema.clone();
+        schema.types.sort_keys();
+        schema.directive_definitions.sort_keys();
+        schema.to_string()
+    }
+
+    /// Helper function to assert composition errors
+    pub(crate) fn assert_composition_errors(
+        result: &Result<Supergraph<Satisfiable>, CompositionFailure>,
+        expected_errors: &[(&str, &str)],
+    ) {
+        let errors = &result
+            .as_ref()
+            .expect_err("Expected composition to fail")
+            .errors;
+        let error_strings: Vec<(String, String)> = errors
+            .iter()
+            .map(|e| (e.code().definition().code().to_string(), e.to_string()))
+            .collect();
+
+        // Verify error count matches expectations
+        assert_eq!(
+            expected_errors.len(),
+            errors.len(),
+            "Expected {} errors but got {}:\nEXPECTED:\n{:?}\nACTUAL:\n{:?}",
+            expected_errors.len(),
+            errors.len(),
+            expected_errors,
+            error_strings
+        );
+
+        // Verify each expected error code and message
+        for (i, (expected_code, expected_message)) in expected_errors.iter().enumerate() {
+            let (error_code, error_str) = &error_strings[i];
+
+            let error_str = remove_indentation(error_str);
+            let expected_message = remove_indentation(expected_message);
+
+            // Check error code
+            assert!(
+                error_code == expected_code,
+                "Error at index {} does not equal expected code.\n\nEXPECTED:\n{}\nACTUAL:\n{}",
+                i,
+                format_args!("code: {}\nmessage: {}\n", expected_code, expected_message),
+                format_args!("code: {}\nmessage: {}\n", error_code, error_str)
+            );
+            // Check error message
+            assert!(
+                error_str == expected_message,
+                "Error at index {} does not equal expected message.\n\nEXPECTED:\n{}\nACTUAL:\n{}",
+                i,
+                format_args!("code: {}\nmessage: {}\n", expected_code, expected_message),
+                format_args!("code: {}\nmessage: {}\n", error_code, error_str)
+            );
+        }
+    }
+
+    /// Helper function to extract subgraphs from supergraph for testing
+    /// Equivalent to extractSubgraphFromSupergraph from the JS tests
+    pub(crate) fn extract_subgraphs_from_supergraph_result(
+        supergraph: &Supergraph<Satisfiable>,
+    ) -> Result<ValidFederationSubgraphs, FederationError> {
+        // Use the public API on Supergraph to extract subgraphs
+        let schema_sdl = supergraph.schema().schema().to_string();
+        let api_supergraph = apollo_federation::Supergraph::new(&schema_sdl)?;
+        api_supergraph.extract_subgraphs()
+    }
+
+    pub(crate) fn assert_hints_equal(
+        actual_hints: &Vec<CompositionHint>,
+        expected_hints: &Vec<CompositionHint>,
+    ) {
+        if actual_hints.len() != expected_hints.len() {
+            panic!(
+                "Mismatched number of hints: expected {} hint(s) but got {} hint(s)\nEXPECTED:\n{expected_hints:#?}\nACTUAL:\n{actual_hints:#?}",
+                expected_hints.len(),
+                actual_hints.len()
+            )
+        }
+        let zipped = zip(actual_hints, expected_hints);
+        zipped.for_each(|(ch1, ch2)| {
+            assert!(
+                ch1.code() == ch2.code() && ch1.message() == ch2.message(),
+                "EXPECTED:\n{:#?}\nACTUAL:\n{:#?}",
+                expected_hints,
+                actual_hints
+            )
+        });
+    }
+}
+
+pub(crate) use test_helpers::ServiceDefinition;
+pub(crate) use test_helpers::assert_composition_errors;
+pub(crate) use test_helpers::assert_hints_equal;
+pub(crate) use test_helpers::compose;
+pub(crate) use test_helpers::compose_as_fed2_subgraphs;
+pub(crate) use test_helpers::compose_as_fed2_subgraphs_with_options;
+pub(crate) use test_helpers::extract_subgraphs_from_supergraph_result;
+pub(crate) use test_helpers::print_sdl;

@@ -1,0 +1,63 @@
+NOTICE — Modified Software
+
+This repository contains a modified version of Apollo Router, originally
+developed and maintained by Apollo Graph, Inc.
+
+Original source: https://github.com/apollographql/router
+Original license: Elastic License 2.0 (see LICENSE file)
+
+================================================================================
+MODIFICATIONS
+================================================================================
+
+The following modifications have been made by the maintainers of this fork
+(the "Modifier") as a Proof of Concept (POC) to evaluate Apollo Router
+Enterprise capabilities prior to purchasing an Enterprise license:
+
+1. Enterprise feature gating logic has been modified to allow internal
+   evaluation of all router capabilities without an active license key.
+
+2. Certain test cases related to license enforcement have been removed
+   as they are no longer applicable to the modified behavior.
+
+Files modified:
+- apollo-router/src/uplink/license_enforcement.rs
+- apollo-router/src/state_machine.rs
+- apollo-router/src/axum_factory/axum_http_server_factory.rs
+
+================================================================================
+SCOPE OF USE
+================================================================================
+
+This modified software is intended SOLELY for:
+- Proof of Concept (POC) evaluation prior to Enterprise license purchase
+- Internal development and testing to validate feature requirements
+- Technical feasibility assessment for purchase decision-making
+
+This software is NOT distributed to, nor made available as a service for,
+any third party.
+
+================================================================================
+DISCLAIMER
+================================================================================
+
+This modified version is provided "as is" without warranty of any kind.
+The Modifier acknowledges that:
+
+1. The original software is licensed under the Elastic License 2.0.
+2. This fork is maintained privately and is not publicly distributed.
+3. This POC is conducted solely to inform an Enterprise license purchase
+   decision. Production deployment will only proceed after acquiring a
+   valid commercial license from Apollo Graph, Inc.
+4. This modified version shall not be used as a hosted or managed service
+   provided to third parties.
+
+For production use, please obtain a valid Apollo Enterprise License from:
+https://www.apollographql.com/contact-sales
+
+================================================================================
+COPYRIGHT
+================================================================================
+
+Original software: Copyright 2021 Apollo Graph, Inc.
+Modifications: Copyright 2026 the maintainers of this fork.

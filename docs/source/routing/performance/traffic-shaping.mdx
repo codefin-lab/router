@@ -1,0 +1,285 @@
+---
+title: Traffic Shaping
+subtitle: Tune the performance and reliability of traffic to and from the router
+description: Fine-tune traffic performance and reliability in GraphOS Router and Apollo Router Core with YAML configuration for client and subgraph traffic shaping. 
+---
+
+The GraphOS Router and Apollo Router Core provide various features to improve the performance and reliability of the traffic between the client and router and between the router and subgraphs.
+
+## Configuration
+
+By default, the `traffic_shaping` plugin is enabled with [preset values](#preset-values). To override presets, add `traffic_shaping` to your [YAML config file](/router/configuration/overview/#yaml-config-file) like so:
+
+```yaml title="router.yaml"
+traffic_shaping:
+  router: # Rules applied to requests from clients to the router
+    global_rate_limit: # Accept a maximum of 10 requests per 5 secs. Excess requests must be rejected.
+      capacity: 10
+      interval: 5s # Must not be greater than 18_446_744_073_709_551_615 milliseconds and not less than 0 milliseconds
+    timeout: 50s # If a request to the router takes more than 50secs then cancel the request (30 sec by default)
+    concurrency_limit: 100 # The router is limited to processing 100 concurrent requests. Excess requests must be rejected.
+  all:
+    deduplicate_query: true # Enable query deduplication for all subgraphs.
+    compression: br # Enable brotli compression for all subgraphs.
+  subgraphs: # Rules applied to requests from the router to individual subgraphs
+    products:
+      deduplicate_query: false # Disable query deduplication for the products subgraph.
+      compression: gzip # Enable gzip compression only for the products subgraph.
+      global_rate_limit: # Accept a maximum of 10 requests per 5 secs from the router. Excess requests must be rejected.
+        capacity: 10
+        interval: 5s # Must not be greater than 18_446_744_073_709_551_615 milliseconds and not less than 0 milliseconds
+      timeout: 50s # If a request to the subgraph 'products' takes more than 50secs then cancel the request (30 sec by default)
+      experimental_http2: enable # Configures HTTP/2 usage. Can be 'enable' (default), 'disable' or 'http2only'
+```
+
+### Preset values
+
+The preset values of `traffic_shaping` that's enabled by default:
+
+- `timeout: 30s` for all timeouts
+- `experimental_http2: enable`
+
+## Client side traffic shaping
+
+### Rate limiting
+
+The router can apply rate limiting on client requests, as follows:
+
+```yaml title="router.yaml"
+traffic_shaping:
+  router: # Rules applied to requests from clients to the router
+    global_rate_limit: # Accept a maximum of 10 requests per 5 secs. Excess requests must be rejected.
+      capacity: 10
+      interval: 5s # Must not be greater than 18_446_744_073_709_551_615 milliseconds and not less than 0 milliseconds
+```
+
+This rate limiting applies to all requests, there is no filtering per IP or other criteria.
+
+If the router-level rate limit is hit, Apollo Router returns a [HTTP 503 status code](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/503) to indicate that the service is unavailable.
+
+### Timeouts
+
+The router applies a default timeout of 30 seconds for all requests, including the following:
+
+- Requests the client makes to the router
+- Requests the router makes to subgraphs
+- Initial requests subgraphs make to the router for [subscription callbacks](https://www.apollographql.com/docs/react/data/subscriptions/#http)
+  - For subscriptions callbacks, the timeout only applies to the initial request to the router. Once the subscription has been established, the request duration can exceed the timeout.
+
+#### Router timeouts
+
+Configure timeout values for client requests to the router:
+
+```yaml title="router.yaml"
+traffic_shaping:
+  router:
+    timeout: 50s # If client requests to the router take more than 50 seconds, cancel the request (30 seconds by default)
+```
+
+If the router-level timeout is hit, the router returns a [HTTP 504 status code](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/504) to indicate a gateway timeout.
+
+#### Subgraph timeouts
+
+Configure timeout values for requests between the router and subgraphs:
+
+```yaml title="router.yaml"
+traffic_shaping:
+  all:
+    timeout: 50s # If subgraph requests take more than 50 seconds, cancel the request (30 seconds by default)
+```
+
+Subgraph timeouts apply to each individual subgraph fetch request. There can be multiple subgraph requests, even to the same subgraph, within a single router request.
+
+If the subgraph-level timeout is hit, the router returns a [GraphQL-compliant HTTP 200 status code](https://graphql.github.io/graphql-over-http/). Because the router can handle multiple subgraph requests for one operation, the timeout of one subgraph doesn't immediately invalidate other requests in the query plan. Returning a 200 status code enables the router to return partial data from other requests that didn't timeout.
+
+#### Timeout hierarchy
+
+Set your router timeout to be greater than your subgraph timeouts. This difference provides a processing buffer, which enables the router to properly handle subgraph timeouts and return appropriate error responses to clients.
+
+A properly configured timeout hierarchy:
+
+```yaml title="router.yaml"
+traffic_shaping:
+  router:
+    timeout: 60s # Router: 60 seconds
+  all:
+    timeout: 30s # Default for any subgraphs not explicitly named below
+  subgraphs:
+    products:
+      timeout: 45s # Products subgraph: 45 seconds (lower than router)
+    inventory:
+      timeout: 20s # Inventory subgraph: 20 seconds
+```
+
+<Note>
+
+Since [deferred](/router/executing-operations/defer-support/#what-is-defer) fragments are separate requests, each fragment's request is individually subject to timeouts.
+
+</Note>
+
+### Concurrency
+
+By default, the router does not enforce a concurrency limit. To enforce a limit, change your config to include:
+
+```yaml title="router.yaml"
+traffic_shaping:
+  router:
+    concurrency_limit: 100 # The router is limited to processing 100 concurrent requests. Excess requests must be rejected.
+```
+
+<Note>
+
+This is not a concurrency limit on connections, but a limit on the number of active requests being processed by the router at any one time.
+
+</Note>
+
+### Compression
+
+Compression is automatically supported on the client side, depending on the `Accept-Encoding` header provided by the client.
+
+### Query batching
+
+The router has support for receiving client query batches:
+
+```yaml title="router.yaml"
+batching:
+  enabled: true
+  mode: batch_http_link
+```
+
+For details, see [query batching for the router](/router/executing-operations/query-batching).
+
+## Subgraph traffic shaping
+
+The router supports various options affecting traffic destined for subgraphs, that can either be defined for all subgraphs, or overriden per subgraph:
+
+```yaml title="router.yaml"
+traffic_shaping:
+  all:
+    deduplicate_query: true # Enable query deduplication for all subgraphs.
+  subgraphs: # Rules applied to requests from the router to individual subgraphs
+    products:
+      deduplicate_query: false # Disable query deduplication for the products subgraph.
+```
+
+### Compression
+
+The router can compress request bodies sent to subgraphs, along with response bodies returned to clients.
+It currently supports these algorithms: `gzip`, `br`, and `deflate`.
+
+```yaml title="router.yaml"
+traffic_shaping:
+  all:
+    compression: gzip # Enable gzip compression for all subgraphs.
+```
+
+#### Compression headers
+
+When you configure compression for subgraph traffic, the router automatically manages HTTP compression headers:
+
+- **`content-encoding` header**: When you enable compression using `traffic_shaping.all.compression` or `traffic_shaping.subgraphs.<name>.compression`, the router sets this header on outgoing requests to subgraphs. This header indicates the router compressed the request body using the specified algorithm (for example, `content-encoding: gzip`).
+- **`accept-encoding` header**: The router automatically sets this header on all subgraph requests to indicate it accepts compressed responses. The router always accepts responses compressed with `gzip`, `br`, or `deflate`, whether or not you configure outgoing compression.
+
+The router always indicates it accepts compressed responses using the `accept-encoding` header, but it only compresses request bodies when you configure the `compression` option.
+
+<Note>
+
+The router adds these headers to requests after adding them to the debug stack, so the headers don't appear in the Connectors Debugger. They are present in the actual HTTP requests sent to subgraphs.
+
+</Note>
+
+<Note>
+
+Brotli (`br`) compression is not supported by Apollo Server, due to its underlying Express.js not supporting it out of the box. Therefore, don't configure `br` compression for traffic shaping when using Apollo Server as a subgraph server with the router. 
+
+</Note>
+
+Use the `identity` keyword to disable request body compression for a specific subgraph.
+
+```yaml title="router.yaml"
+traffic_shaping:
+  all:
+    compression: gzip # Enable gzip compression for all subgraphs.
+  subgraphs:
+    products:
+      compression: identity # Disable compression for products subgraph.
+```
+
+### Rate limiting
+
+Subgraph request rate limiting uses the same configuration as client rate limiting, and is calculated per subgraph, not per backend host.
+
+```yaml title="router.yaml"
+traffic_shaping:
+  all:
+    global_rate_limit: # Accept a maximum of 10 requests per 5 secs. Excess requests must be rejected.
+      capacity: 10
+      interval: 5s # Must not be greater than 18_446_744_073_709_551_615 milliseconds and not less than 0 milliseconds
+```
+
+### Variable deduplication
+
+When subgraphs are sent entity requests by the router using the `_entities` field, it is often the case that the same entity (identified by a unique `@key` constraint) is requested multiple times within the execution of a single federated query.  For example, an author's name might need to be fetched multiple times when accessing a list of a reviews for a product for which the author has written multiple reviews.
+
+To reduce the size of subgraph requests and the amount of work they might perform, the list of entities sent can be deduplicated. This is always active.
+
+### Query deduplication
+
+If the router is simultaneously processing similar queries, it may result in producing multiple identical requests to a subgraph.  With the `deduplicate_query` functionality enabled (by default, it is disabled), the router can avoid sending the same query multiple times and instead buffer one or more of the dependent queries pending the result of the first, and reuse that result to fulfill all of the initial queries.  This will reduce the overall traffic to the subgraph and the overall client request latency.  To meet the criteria for deduplication, the feature must be enabled and the subgraph queries must have have the same HTTP path, headers and body:
+
+```yaml title="router.yaml"
+traffic_shaping:
+  all:
+    deduplicate_query: true # Enable query deduplication for all subgraphs.
+```
+
+### HTTP/2
+
+<HttpConnection type="subgraph" />
+
+#### HTTP/2 keep-alive
+
+Router can send periodic HTTP/2 PING frames on idle subgraph connections to detect and close stale connections before they cause request failures. This is particularly useful when connections can become silently broken (for example, due to network timeouts or load balancer idle timeouts).
+
+Use `experimental_http2_keep_alive_interval` to enable keep-alive pings. When you set this, the router sends a PING frame after a connection has been idle for the specified duration. If your subgraph does not respond within `experimental_http2_keep_alive_timeout` (default: 20 seconds), the connection is closed.
+
+Both options apply under `all`, per-subgraph under `subgraphs`, and per-source under `connector.sources`.
+
+```yaml title="router.yaml"
+traffic_shaping:
+  all:
+    experimental_http2_keep_alive_interval: 30s # Send a PING every 30s on idle connections
+    experimental_http2_keep_alive_timeout: 10s  # Close the connection if no PONG within 10s
+```
+
+<Note>
+
+Keep-alive pings require HTTP/2 to be active. Setting `experimental_http2: disable` will prevent pings from being sent regardless of these settings.
+
+</Note>
+
+### Connection pool
+
+The router maintains a pool of connections to each subgraph. Use `pool_idle_timeout` to set how long an idle connection stays in the pool before it's eligible for eviction. The default is 15 seconds. Set it to `null` to disable idle eviction entirely.
+
+Expired connections are evicted lazily: when the router fetches a connection from the pool to make a request, it discards any connection that has been idle longer than `pool_idle_timeout` and opens a fresh one.
+
+```yaml title="router.yaml"
+traffic_shaping:
+  all:
+    pool_idle_timeout: 30s  # default: 15s; set to null to disable
+```
+
+This option applies under `all`, per-subgraph under `subgraphs`, and per-source under `connector.sources`.
+
+### Ordering
+
+Traffic shaping always executes these steps in the same order, to ensure a consistent behavior. Declaration order in the configuration will not affect the runtime order:
+
+- preparing the subgraph request
+- variable deduplication
+- query deduplication
+- timeout
+- rate limiting
+- compression
+- sending the request to the subgraph

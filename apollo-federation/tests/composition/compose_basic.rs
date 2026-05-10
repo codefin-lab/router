@@ -1,0 +1,672 @@
+use apollo_compiler::coord;
+use apollo_federation::subgraph::typestate::Subgraph;
+use apollo_federation::supergraph::Supergraph;
+use insta::assert_snapshot;
+use test_log::test;
+
+use super::ServiceDefinition;
+use super::assert_composition_errors;
+use super::compose;
+use super::compose_as_fed2_subgraphs;
+use super::extract_subgraphs_from_supergraph_result;
+
+#[test]
+fn generates_a_valid_supergraph() {
+    let subgraph1 = ServiceDefinition {
+        name: "Subgraph1",
+        type_defs: r#"
+        type Query {
+          t: T
+        }
+
+        type T @key(fields: "k") {
+          k: ID
+        }
+
+        type S {
+          x: Int
+        }
+
+        union U = S | T
+        "#,
+    };
+
+    let subgraph2 = ServiceDefinition {
+        name: "Subgraph2",
+        type_defs: r#"
+        type T @key(fields: "k") {
+          k: ID
+          a: Int
+          b: String
+        }
+
+        enum E {
+          V1
+          V2
+        }
+        "#,
+    };
+
+    let result = compose_as_fed2_subgraphs(&[subgraph1, subgraph2]);
+    let supergraph = result.expect("Expected composition to succeed");
+    let api_schema = supergraph
+        .to_api_schema(Default::default())
+        .expect("Expected API schema generation to succeed");
+
+    assert_snapshot!(supergraph.schema().schema());
+    assert_snapshot!(api_schema.schema());
+}
+
+/// Ensures that when a type T implements an interface I in both a base definition (Subgraph1)
+/// and an extension (Subgraph2), the supergraph SDL emits "type T implements I" on the
+/// main type definition line rather than splitting into "type T" + "extend type T implements I".
+#[test]
+fn implements_on_type_definition_not_extend_type() {
+    let subgraph_a = ServiceDefinition {
+        name: "Subgraph1",
+        type_defs: r#"
+            type Query {
+              t: T
+            }
+
+            interface I {
+              id: ID!
+            }
+
+            type T implements I @key(fields: "id") {
+              id: ID!
+            }
+        "#,
+    };
+
+    let subgraph_b = ServiceDefinition {
+        name: "Subgraph2",
+        type_defs: r#"
+            interface I {
+              id: ID!
+            }
+
+            extend type T implements I @key(fields: "id") {
+              id: ID!
+              note: String
+            }
+        "#,
+    };
+
+    let supergraph =
+        compose_as_fed2_subgraphs(&[subgraph_a, subgraph_b]).expect("composition should succeed");
+    assert_snapshot!(supergraph.schema().schema());
+}
+
+#[test]
+fn preserves_descriptions() {
+    let subgraph1 = ServiceDefinition {
+        name: "Subgraph1",
+        type_defs: r#"
+        "The foo directive description"
+        directive @foo(url: String) on FIELD
+
+        "A cool schema"
+        schema {
+          query: Query
+        }
+
+        """
+        Available queries
+        Not much yet
+        """
+        type Query {
+          "Returns tea"
+          t(
+            "An argument that is very important"
+            x: String!
+          ): String
+        }
+        "#,
+    };
+
+    let subgraph2 = ServiceDefinition {
+        name: "Subgraph2",
+        type_defs: r#"
+        "The foo directive description"
+        directive @foo(url: String) on FIELD
+
+        "An enum"
+        enum E {
+          "The A value"
+          A
+          "The B value"
+          B
+        }
+        "#,
+    };
+
+    let result = compose_as_fed2_subgraphs(&[subgraph1, subgraph2]);
+    let supergraph = result.expect("Expected composition to succeed");
+    let api_schema = supergraph
+        .to_api_schema(Default::default())
+        .expect("Expected API schema generation to succeed");
+    assert_snapshot!(api_schema.schema());
+}
+
+#[test]
+fn no_hint_raised_when_merging_empty_description() {
+    let subgraph1 = ServiceDefinition {
+        name: "Subgraph1",
+        type_defs: r#"
+        schema {
+          query: Query
+        }
+
+        ""
+        type T {
+          a: String @shareable
+        }
+
+        type Query {
+          "Returns tea"
+          t(
+            "An argument that is very important"
+            x: String!
+          ): T
+        }
+        "#,
+    };
+
+    let subgraph2 = ServiceDefinition {
+        name: "Subgraph2",
+        type_defs: r#"
+        "Type T"
+        type T {
+          a: String @shareable
+        }
+        "#,
+    };
+
+    let result = compose_as_fed2_subgraphs(&[subgraph1, subgraph2]);
+    let supergraph = result.expect("Expected composition to succeed");
+
+    // Verify that no hints are raised when merging empty description with non-empty description
+    assert_eq!(
+        supergraph.hints().len(),
+        0,
+        "Expected no hints but got: {:?}",
+        supergraph.hints()
+    );
+}
+
+#[test]
+fn include_types_from_different_subgraphs() {
+    let subgraph_a = ServiceDefinition {
+        name: "subgraphA",
+        type_defs: r#"
+        type Query {
+          products: [Product!]
+        }
+
+        type Product {
+          sku: String!
+          name: String!
+        }
+        "#,
+    };
+
+    let subgraph_b = ServiceDefinition {
+        name: "subgraphB",
+        type_defs: r#"
+        type User {
+          name: String
+          email: String!
+        }
+        "#,
+    };
+
+    let result = compose_as_fed2_subgraphs(&[subgraph_a, subgraph_b]);
+    let supergraph = result.expect("Expected composition to succeed");
+    let api_schema = supergraph
+        .to_api_schema(Default::default())
+        .expect("Expected API schema generation to succeed");
+    assert_snapshot!(api_schema.schema());
+
+    // Validate extracted subgraphs contain proper federation directives
+    let extracted_subgraphs = extract_subgraphs_from_supergraph_result(&supergraph)
+        .expect("Expected subgraph extraction to succeed");
+
+    let subgraph_a_extracted = extracted_subgraphs
+        .get("subgraphA")
+        .expect("Expected subgraphA to be present in extracted subgraphs");
+    assert_snapshot!(subgraph_a_extracted.schema.schema());
+
+    let subgraph_b_extracted = extracted_subgraphs
+        .get("subgraphB")
+        .expect("Expected subgraphB to be present in extracted subgraphs");
+    assert_snapshot!(subgraph_b_extracted.schema.schema());
+}
+
+#[test]
+fn doesnt_leave_federation_directives_in_the_final_schema() {
+    let subgraph_a = ServiceDefinition {
+        name: "subgraphA",
+        type_defs: r#"
+        type Query {
+          products: [Product!] @provides(fields: "name")
+        }
+
+        type Product @key(fields: "sku") {
+          sku: String!
+          name: String! @external
+        }
+        "#,
+    };
+
+    let subgraph_b = ServiceDefinition {
+        name: "subgraphB",
+        type_defs: r#"
+        type Product @key(fields: "sku") {
+          sku: String!
+          name: String! @shareable
+        }
+        "#,
+    };
+
+    let result = compose_as_fed2_subgraphs(&[subgraph_a, subgraph_b]);
+    let supergraph = result.expect("Expected composition to succeed");
+    let api_schema = supergraph
+        .to_api_schema(Default::default())
+        .expect("Expected API schema generation to succeed");
+    assert_snapshot!(api_schema.schema());
+
+    // Validate that federation directives (@provides, @key, @external, @shareable)
+    // are properly rebuilt in the extracted subgraphs
+    let extracted_subgraphs = extract_subgraphs_from_supergraph_result(&supergraph)
+        .expect("Expected subgraph extraction to succeed");
+
+    let subgraph_a_extracted = extracted_subgraphs
+        .get("subgraphA")
+        .expect("Expected subgraphA to be present in extracted subgraphs");
+    assert_snapshot!(subgraph_a_extracted.schema.schema());
+
+    let subgraph_b_extracted = extracted_subgraphs
+        .get("subgraphB")
+        .expect("Expected subgraphB to be present in extracted subgraphs");
+    assert_snapshot!(subgraph_b_extracted.schema.schema());
+}
+
+#[test]
+fn merges_default_arguments_when_they_are_arrays() {
+    let subgraph_a = ServiceDefinition {
+        name: "subgraph-a",
+        type_defs: r#"
+        type Query {
+          a: A @shareable
+        }
+
+        type A @key(fields: "id") {
+          id: ID
+          get(ids: [ID] = []): [B] @external
+          req: Int @requires(fields: "get { __typename }")
+        }
+
+        type B @key(fields: "id", resolvable: false) {
+          id: ID
+        }
+        "#,
+    };
+
+    let subgraph_b = ServiceDefinition {
+        name: "subgraph-b",
+        type_defs: r#"
+        type Query {
+          a: A @shareable
+        }
+
+        type A @key(fields: "id") {
+          id: ID
+          get(ids: [ID] = []): [B]
+        }
+
+        type B @key(fields: "id") {
+          id: ID
+        }
+        "#,
+    };
+
+    let result = compose_as_fed2_subgraphs(&[subgraph_a, subgraph_b]);
+    let _supergraph = result.expect("Expected composition to succeed");
+}
+
+#[test]
+fn removes_redundant_join_field_directives() {
+    let subgraph1 = ServiceDefinition {
+        name: "Subgraph1",
+        type_defs: r#"
+        type Query {
+          product(id: ID!): Product
+        }
+
+        type Product @key(fields: "id") {
+          id: ID!
+          name: String! @shareable
+          price: Float! @shareable
+        }
+        "#,
+    };
+
+    let subgraph2 = ServiceDefinition {
+        name: "Subgraph2",
+        type_defs: r#"
+        type Product @key(fields: "id") {
+          id: ID!
+          name: String! @shareable
+          price: Float! @shareable
+          description: String
+        }
+        "#,
+    };
+
+    let result = compose_as_fed2_subgraphs(&[subgraph1, subgraph2]);
+    let supergraph = result.expect("Expected composition to succeed");
+    let schema = supergraph.schema().schema();
+
+    // Fields in both subgraphs should not have @join__field
+    for field_coord in [
+        coord!(Product.id),
+        coord!(Product.name),
+        coord!(Product.price),
+    ] {
+        let field = field_coord.lookup_field(schema).expect("Field exists");
+        let has_join_field = field.directives.iter().any(|d| d.name == "join__field");
+        assert!(
+            !has_join_field,
+            "Field {} should not have @join__field directives",
+            field_coord
+        );
+    }
+
+    // Field only in one subgraph should have @join__field
+    let description_field = coord!(Product.description)
+        .lookup_field(schema)
+        .expect("Field exists");
+    let has_join_field = description_field
+        .directives
+        .iter()
+        .any(|d| d.name == "join__field");
+    assert!(
+        has_join_field,
+        "Field Product.description should have @join__field directive"
+    );
+}
+
+// Regression test: enum usage tracking must not downgrade `Both` back to `Input` or `Output`
+// when a third (or later) field references the same enum in a position already seen.
+// Before the fix, the third output-position reference would overwrite `Both` → `Output`,
+// causing the ENUM_VALUE_MISMATCH error to be silently skipped.
+#[test]
+fn enum_value_mismatch_detected_with_multiple_output_fields() {
+    let subgraph_a = ServiceDefinition {
+        name: "subgraphA",
+        type_defs: r#"
+        type Query {
+          search(status: Status!): Result
+        }
+
+        type Result {
+          primary: Status!
+          secondary: Status!
+        }
+
+        enum Status {
+          ACTIVE
+          INACTIVE
+        }
+        "#,
+    };
+
+    let subgraph_b = ServiceDefinition {
+        name: "subgraphB",
+        type_defs: r#"
+        type Query {
+          other: Int
+        }
+
+        enum Status {
+          ACTIVE
+        }
+        "#,
+    };
+
+    // Status is used as input (Query.search(status:)) and output (Result.primary, Result.secondary).
+    // After processing: Input → Both → must stay Both (not downgrade to Output on the second output field).
+    // Value INACTIVE is only in subgraphA, so ENUM_VALUE_MISMATCH must be reported.
+    let result = compose_as_fed2_subgraphs(&[subgraph_a, subgraph_b]);
+    assert_composition_errors(
+        &result,
+        &[(
+            "ENUM_VALUE_MISMATCH",
+            r#"Enum type "Status" is used as both input type (for example, as type of "Query.search(status:)") and output type (for example, as type of "Result.primary"), but value "INACTIVE" is not defined in all the subgraphs defining "Status": "INACTIVE" is defined in subgraph "subgraphA" but not in subgraph "subgraphB""#,
+        )],
+    );
+}
+
+// Same regression but with multiple input fields: ensures `Both` isn't downgraded to `Input`.
+// The merger processes object types alphabetically, so `Alpha` (output field) is merged before
+// `Beta` (input arguments). This creates the sequence: Output → Both → Input(BUG without fix).
+#[test]
+fn enum_value_mismatch_detected_with_multiple_input_fields() {
+    let subgraph_a = ServiceDefinition {
+        name: "subgraphA",
+        type_defs: r#"
+        type Query {
+          alpha: Alpha
+          beta: Beta
+        }
+
+        type Alpha {
+          status: Status!
+        }
+
+        type Beta {
+          filterA(status: Status!): String
+          filterB(status: Status!): String
+        }
+
+        enum Status {
+          ACTIVE
+          INACTIVE
+        }
+        "#,
+    };
+
+    let subgraph_b = ServiceDefinition {
+        name: "subgraphB",
+        type_defs: r#"
+        type Query {
+          other: Int
+        }
+
+        enum Status {
+          ACTIVE
+        }
+        "#,
+    };
+
+    // Status is used as output (Alpha.status) and input (Beta.filterA(status:), Beta.filterB(status:)).
+    // Merge order: Alpha.status(output) → Both via Beta.filterA(status:)(input) → must stay Both
+    // (not downgrade to Input on Beta.filterB(status:)).
+    let result = compose_as_fed2_subgraphs(&[subgraph_a, subgraph_b]);
+    assert_composition_errors(
+        &result,
+        &[(
+            "ENUM_VALUE_MISMATCH",
+            r#"Enum type "Status" is used as both input type (for example, as type of "Beta.filterA(status:)") and output type (for example, as type of "Alpha.status"), but value "INACTIVE" is not defined in all the subgraphs defining "Status": "INACTIVE" is defined in subgraph "subgraphA" but not in subgraph "subgraphB""#,
+        )],
+    );
+}
+
+#[test]
+fn override_from_nonexistent_subgraph_hint_has_no_empty_did_you_mean() {
+    let subgraph_a = ServiceDefinition {
+        name: "subgraphA",
+        type_defs: r#"
+        type Query {
+          product: Product
+        }
+
+        type Product @key(fields: "id") {
+          id: ID!
+          name: String! @override(from: "nonExistent") @shareable
+        }
+        "#,
+    };
+
+    let subgraph_b = ServiceDefinition {
+        name: "subgraphB",
+        type_defs: r#"
+        type Product @key(fields: "id") {
+          id: ID!
+          name: String! @shareable
+        }
+        "#,
+    };
+
+    let result = compose_as_fed2_subgraphs(&[subgraph_a, subgraph_b]);
+    let supergraph = result.expect("Expected composition to succeed");
+
+    let from_subgraph_hints: Vec<_> = supergraph
+        .hints()
+        .iter()
+        .filter(|h| h.code() == "FROM_SUBGRAPH_DOES_NOT_EXIST")
+        .collect();
+
+    assert_eq!(from_subgraph_hints.len(), 1);
+    let message = &from_subgraph_hints[0].message;
+    assert!(
+        !message.contains("Did you mean"),
+        "Hint message should not contain empty 'Did you mean' suggestion, got: {message}"
+    );
+    assert!(
+        message.ends_with("does not exist."),
+        "Hint message should end with 'does not exist.', got: {message}"
+    );
+}
+
+#[test]
+fn override_from_nonexistent_subgraph_hint_has_subgraph_location() {
+    let subgraph_a = ServiceDefinition {
+        name: "subgraphA",
+        type_defs: r#"
+        type Query {
+          product: Product
+        }
+
+        type Product @key(fields: "id") {
+          id: ID!
+          name: String! @override(from: "nonExistent") @shareable
+        }
+        "#,
+    };
+
+    let subgraph_b = ServiceDefinition {
+        name: "subgraphB",
+        type_defs: r#"
+        type Product @key(fields: "id") {
+          id: ID!
+          name: String! @shareable
+        }
+        "#,
+    };
+
+    let result = compose_as_fed2_subgraphs(&[subgraph_a, subgraph_b]);
+    let supergraph = result.expect("Expected composition to succeed");
+
+    let from_subgraph_hints: Vec<_> = supergraph
+        .hints()
+        .iter()
+        .filter(|h| h.code() == "FROM_SUBGRAPH_DOES_NOT_EXIST")
+        .collect();
+
+    assert_eq!(from_subgraph_hints.len(), 1);
+    let hint = &from_subgraph_hints[0];
+    assert_eq!(
+        hint.locations.len(),
+        1,
+        "Hint should have exactly one location"
+    );
+    assert_eq!(
+        hint.locations[0].subgraph, "subgraphA",
+        "Hint location should reference the subgraph with @override"
+    );
+}
+
+/// Regression test: when subgraphs use `extend schema { query: Query }`,
+/// the supergraph SDL must be re-parseable without "duplicate definitions
+/// for the `query` root operation type" errors.
+#[test]
+fn supergraph_sdl_is_reparseable_when_subgraphs_use_extend_schema() {
+    let sub1 = Subgraph::parse(
+        "s1",
+        "http://s1",
+        r#"
+            extend schema
+              @link(url: "https://specs.apollo.dev/link/v1.0")
+              @link(url: "https://specs.apollo.dev/federation/v2.9", import: ["@key", "@shareable"])
+            {
+              query: Query
+              mutation: Mutation
+            }
+
+            directive @link(url: String, as: String, for: link__Purpose, import: [link__Import]) repeatable on SCHEMA
+            directive @key(fields: federation__FieldSet!, resolvable: Boolean = true) repeatable on OBJECT | INTERFACE
+            directive @shareable repeatable on OBJECT | FIELD_DEFINITION
+
+            enum link__Purpose { SECURITY EXECUTION }
+            scalar link__Import
+            scalar federation__FieldSet
+
+            type Query {
+              hello: String
+            }
+
+            type Mutation {
+              doThing: String
+            }
+        "#,
+    )
+    .unwrap();
+
+    let sub2 = Subgraph::parse(
+        "s2",
+        "http://s2",
+        r#"
+            extend schema
+              @link(url: "https://specs.apollo.dev/link/v1.0")
+              @link(url: "https://specs.apollo.dev/federation/v2.9", import: ["@key", "@shareable"])
+            {
+              query: Query
+              mutation: Mutation
+            }
+
+            directive @link(url: String, as: String, for: link__Purpose, import: [link__Import]) repeatable on SCHEMA
+            directive @key(fields: federation__FieldSet!, resolvable: Boolean = true) repeatable on OBJECT | INTERFACE
+            directive @shareable repeatable on OBJECT | FIELD_DEFINITION
+
+            enum link__Purpose { SECURITY EXECUTION }
+            scalar link__Import
+            scalar federation__FieldSet
+
+            type Query {
+              world: String
+            }
+
+            type Mutation {
+              doOther: String
+            }
+        "#,
+    )
+    .unwrap();
+
+    let supergraph = compose(vec![sub1, sub2]).expect("composition should succeed");
+    let sdl = supergraph.schema().schema().to_string();
+
+    Supergraph::parse(&sdl).expect("supergraph SDL should be re-parseable");
+}

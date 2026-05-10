@@ -1,0 +1,20 @@
+pull_request_rules:
+  - name: backport v2.10.x
+    description: Add a label to backport to 2.10.x
+    conditions:
+      - label = backport-2.10.x
+    actions:
+      backport:
+        branches:
+          - dev-v2.10.x
+        assignees:
+          - "{{ author }}"
+        bot_account: "{{ author }}"
+defaults:
+  actions:
+    backport:
+      assignees:
+        - "{{ author }}"
+      bot_account: "{{ author }}"
+merge_protections_settings:
+  reporting_method: check-runs

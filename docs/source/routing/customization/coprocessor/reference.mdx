@@ -1,0 +1,1016 @@
+---
+title: Coprocessor Reference
+---
+
+## Property reference
+
+Table of coprocessor request properties.
+
+<table class="field-table api-ref">
+  <thead>
+    <tr>
+      <th>Property / Type</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+
+<tbody>
+
+<tr>
+<td colspan="2">
+
+**Control properties**
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+##### `control`
+
+`string | object`
+
+</td>
+<td>
+
+Indicates whether the router should continue processing the current client request. In coprocessor request bodies from the router, this value is always the string value `continue`.
+
+In your coprocessor's response, you can instead return an _object_ with the following format:
+
+```json
+{ "break": 400 }
+```
+
+If you do this, the router terminates the request-handling lifecycle and immediately responds to the client with the provided HTTP code and response [`body`](#body) you specify.
+
+For details, see [Terminating a client request](#terminating-a-client-request).
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+##### `id`
+
+`string`
+
+</td>
+<td>
+
+A unique ID corresponding to the client request associated with this coprocessor request.
+
+**Do not return a _different_ value for this property.** If you do, the router treats the coprocessor request as if it failed.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+##### `subgraphRequestId`
+
+`string`
+
+</td>
+<td>
+
+A unique ID corresponding to the subgraph request associated with this coprocessor request (only available at the `SubgraphRequest` and `SubgraphResponse` stages).
+
+**Do not return a _different_ value for this property.** If you do, the router treats the coprocessor request as if it failed.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+##### `stage`
+
+`string`
+
+</td>
+<td>
+
+Indicates which stage of the router's [request-handling lifecycle](/graphos/routing/customization/rhai/#router-request-lifecycle) this coprocessor request corresponds to.
+
+This value is one of the following:
+
+- `RouterRequest`: The `RouterService` has just received a client request.
+- `RouterResponse`: The `RouterService` is about to send response data to a client.
+- `SupergraphRequest`: The `SupergraphService` is about to send a GraphQL request.
+- `SupergraphResponse`: The `SupergraphService` has just received a GraphQL response.
+- `ExecutionRequest`: The `ExecutionService` is about to execute a query plan against subgraphs.
+- `ExecutionResponse`: The `ExecutionService` has a response from all subgraphs.
+- `SubgraphRequest`: The `SubgraphService` is about to send a request to a subgraph.
+- `SubgraphResponse`: The `SubgraphService` has just received a subgraph response.
+- `ConnectorRequest`: The `ConnectorRequestService` is about to send an HTTP request to a REST API.
+- `ConnectorResponse`: The `ConnectorRequestService` has just received an HTTP response from a REST API.
+
+**Do not return a _different_ value for this property.** If you do, the router treats the coprocessor request as if it failed.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+##### `version`
+
+`number`
+
+</td>
+<td>
+
+Indicates which version of the coprocessor request protocol the router is using.
+
+Currently, this value is always `1`.
+
+**Do not return a _different_ value for this property.** If you do, the router treats the coprocessor request as if it failed.
+
+</td>
+</tr>
+
+<tr>
+<td colspan="2">
+
+**Data properties**
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+##### `body`
+
+`string | object`
+
+</td>
+<td>
+
+The body of the corresponding request or response.
+
+This field is populated when the underlying HTTP method is `POST`. If you are looking for operation data on `GET` requests, that info will be populated in the `path` parameter per the [GraphQL over HTTP spec](https://github.com/graphql/graphql-over-http/blob/main/spec/GraphQLOverHTTP.md#get).
+
+If your coprocessor [returns a _different_ value](#responding-to-coprocessor-requests) for `body`, the router replaces the existing body with that value. This is common when [terminating a client request](#terminating-a-client-request).
+
+This field's type depends on the coprocessor request's [`stage`](#stage):
+
+- For `SubgraphService` stages, `body` is a JSON _object_.
+- For `SupergraphService` stages, `body` is a JSON _object_.
+- For `RouterService` stages, `body` is a JSON _string_.
+  - This is necessary to support handling [deferred queries](#handling-deferred-query-responses).
+  - If you modify `body` during the `RouterRequest` stage, the new value must be a valid string serialization of a JSON object. If it isn't, the router detects that the body is malformed and returns an error to the client.
+- For connector stages, `body` is a JSON _object_ for both requests and responses when the body is valid JSON, or a JSON _string_ if the request body is not valid JSON.
+  - If the request body is valid JSON, it is sent as a parsed JSON object. Otherwise, it is sent as a raw string.
+  - The response body is the parsed JSON data or an error object.
+
+This field's structure depends on whether the coprocessor request corresponds to a request, a standard response, or a response "chunk" for a deferred query:
+
+- **If a request,** `body` usually contains a `query` property containing the GraphQL query string.
+- **If a standard response,** `body` usually contains `data` and/or `errors` properties for the GraphQL operation result.
+- **If a response "chunk",** `body` contains `data` for _some_ of the operation fields.
+
+By default, the `RouterResponse` stage returns _redacted_ errors within the `errors` field. To process subgraph errors manually in your coprocessor, enable [subgraph error inclusion](/router/configuration/subgraph-error-inclusion).
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+##### `context`
+
+`object`
+
+</td>
+<td>
+
+An object representing the router's shared context for the corresponding client request.
+
+If your coprocessor [returns a _different_ value](#responding-to-coprocessor-requests) for `context`, the router replaces the existing context with that value.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+##### `hasNext`
+
+`bool`
+
+</td>
+<td>
+
+When `stage` is `SupergraphResponse`, if present and `true` then there will be subsequent `SupergraphResponse` calls to the co-processor for each multi-part (`@defer`/subscriptions) response.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+##### `headers`
+
+`object`
+
+</td>
+<td>
+
+An object mapping of all HTTP header names and values for the corresponding request or response.
+
+Ensure headers are handled like HTTP headers in general. For example, normalize header case before your coprocessor operates on them.
+
+Any headers with non-UTF-8 values are omitted from coprocessor requests, and the router logs a warning when this occurs.
+
+If your coprocessor [returns a _different_ value](#responding-to-coprocessor-requests) for `headers`, the router replaces the existing headers with that value.
+
+> The router discards any `content-length` headers sent by coprocessors because incorrect `content-length` values can lead to HTTP request failures.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+##### `method`
+
+`string`
+
+</td>
+<td>
+
+The HTTP method that is used by the request.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+##### `path`
+
+`string`
+
+</td>
+<td>
+
+The `RouterService` or `SupergraphService` path that this coprocessor request pertains to.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+##### `sdl`
+
+`string`
+
+</td>
+<td>
+
+A string representation of the router's current supergraph schema.
+
+This value can be very large, so you should avoid including it in coprocessor requests if possible.
+
+The router ignores modifications to this value.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+##### `serviceName`
+
+`string`
+
+</td>
+<td>
+
+The name of the subgraph or connector source that this coprocessor request pertains to.
+
+This value is present for coprocessor requests from the router's `SubgraphService` and connector stages.
+
+**Do not return a _different_ value for this property.** If you do, the router treats the coprocessor request as if it failed.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+##### `statusCode`
+
+`number`
+
+</td>
+<td>
+
+The HTTP status code returned with a response.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+##### `uri`
+
+`string`
+
+</td>
+<td>
+
+When `stage` is `SubgraphRequest` or `ConnectorRequest`, this is the full URI of the subgraph or API endpoint the router will query.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+##### `query_plan`
+
+`string`
+
+</td>
+<td>
+
+When `stage` is `ExecutionRequest`, this contains the query plan for the client query. It cannot be modified by the coprocessor.
+
+</td>
+</tr>
+
+</tbody>
+</table>
+
+## Context key reference
+
+List of context keys available from the router's request context, which is shared across stages of the processing pipeline.
+
+### Core operation
+
+- `apollo::supergraph::operation_name` - Name of the operation
+- `apollo::supergraph::operation_kind` - Operation kind: `query`, `mutation`, or `subscription`
+- `apollo::supergraph::operation_id` - Apollo operation ID
+- `apollo::supergraph::first_event` - First event marker for subscriptions. `false` if the current response chunk is not the first response in the stream, `none` otherwise
+- `apollo::supergraph_schema_id` - Supergraph schema ID
+
+### Authentication and authorization
+
+#### Authentication
+
+- `apollo::authentication::jwt_claims` - Claims extracted from a JWT if present in the request
+- `apollo::authentication::jwt_status` - JWT validation status (internal only)
+
+#### Authorization
+
+- `apollo::authorization::authentication_required` - `true` if the operation contains fields marked with `@authenticated`
+- `apollo::authorization::required_scopes` - If the operation contains fields marked with `@requiresScopes`, it contains the list of scopes used
+- `apollo::authorization::required_policies` - If the query contains fields marked with `@policy`, it contains a map of `policy name -> Option<bool>`. A coprocessor or Rhai script can edit this map to mark `true` on authorization policies that succeed or `false` on ones that fail
+
+### Telemetry
+
+#### Client information
+
+- `apollo::telemetry::client_name` - Client name extracted from the client name header
+- `apollo::telemetry::client_version` - Client version extracted from the client version header
+- `apollo::telemetry::client_library_name` - Client library name
+- `apollo::telemetry::client_library_version` - Client library version
+
+#### Telemetry control
+
+- `apollo::telemetry::subgraph_ftv1` - JSON-serialized trace data returned by the subgraph when FTV1 is enabled
+- `apollo::telemetry::studio_exclude` - `true` if the current request's trace details should be excluded from Studio
+- `apollo::telemetry::contains_graphql_error` - `true` if the response contains at least one error
+- `apollo::telemetry::counted_errors` - Map of already-counted errors (internal)
+- `apollo::telemetry::http_request_resend_count_{subgraph_req_id}` - HTTP retry count (dynamic key with subgraph request ID suffix)
+
+### Demand and cost control
+
+The following keys are populated by the demand control plugin:
+
+- `apollo::demand_control::estimated_cost` - Estimated cost of the requests to be sent to the subgraphs
+- `apollo::demand_control::actual_cost` - Actual calculated cost of the responses returned by the subgraphs
+- `apollo::demand_control::result` - `COST_OK` if allowed, and `COST_TOO_EXPENSIVE` if rejected due to cost limits
+- `apollo::demand_control::estimated_cost_by_subgraph` - Map of estimated cost of the requests to be sent to the subgraphs, by subgraph
+- `apollo::demand_control::actual_cost_by_subgraph` - Map of actual calculated cost of the responses returned by the subgraphs, by subgraph
+- `apollo::demand_control::result_by_subgraph` - Map of result by subgraph, `COST_OK` if allowed, and `COST_TOO_EXPENSIVE` if rejected due to cost limits
+- `apollo::demand_control::strategy` - Name of the cost calculation strategy used
+
+### Caching
+
+#### Response cache
+
+- `apollo::response_cache::key` - Response cache key
+- `apollo::response_cache::debug_cached_keys` - Debug info for cached keys
+- `apollo::router::response_cache::cache_info_subgraph_{subgraph_name}` - Response cache info per subgraph (dynamic key with subgraph name suffix)
+
+#### Automatic persisted queries (APQ)
+
+- `apollo::apq::cache_hit` - Present if the request used APQ; true if we got a cache hit for the query ID, false otherwise
+- `apollo::apq::registered` - `true` if the request registered a query in APQ
+
+### Query plan exposure
+
+- `apollo::expose_query_plan::plan` - Contains the query plan serialized as JSON (editing it has no effect on execution)
+- `apollo::expose_query_plan::formatted_plan` - Query plan formatted as text string
+- `apollo::expose_query_plan::enabled` - `true` if query plan exposure is enabled
+
+### Progressive override
+
+- `apollo::progressive_override::unresolved_labels` - List of unresolved labels
+- `apollo::progressive_override::labels_to_override` - List of labels for which overrides are needed
+
+### Subscriptions
+
+- `apollo::subscriptions::fatal_error` - Fatal subscription error flag
+
+### Persisted queries
+
+- `apollo_persisted_queries::client_name` - Client name for PQ operations
+- `apollo_persisted_queries::safelist::skip_enforcement` - Skip safelist enforcement
+
+### Connectors
+
+- `apollo_connectors::sources_in_query_plan` - List of connector sources in query plan
+
+---
+
+## Example requests by stage
+
+### `RouterRequest`
+
+<ExpansionPanel title="Click to expand">
+
+```json title="Example coprocessor request body"
+{
+  // Control properties
+  "version": 1,
+  "stage": "RouterRequest",
+  "control": "continue",
+  "id": "1b19c05fdafc521016df33148ad63c1b",
+
+  // Data properties
+  "headers": {
+    "cookie": [
+      "tasty_cookie=strawberry"
+    ],
+    "content-type": [
+      "application/json"
+    ],
+    "host": [
+      "127.0.0.1:4000"
+    ],
+    "apollo-federation-include-trace": [
+      "ftv1"
+    ],
+    "apollographql-client-name": [
+      "manual"
+    ],
+    "accept": [
+      "*/*"
+    ],
+    "user-agent": [
+      "curl/7.79.1"
+    ],
+    "content-length": [
+      "46"
+    ]
+  },
+  "body": "{
+    \"query\": \"query GetActiveUser {\n  me {\n  name\n}\n}\"
+  }",
+  "context": {
+    "entries": {
+      "accepts-json": false,
+      "accepts-wildcard": true,
+      "accepts-multipart": false
+    }
+  },
+  "sdl": "...", // String omitted due to length
+  "path": "/",
+  "method": "POST"
+}
+```
+
+</ExpansionPanel>
+
+### `RouterResponse`
+
+<ExpansionPanel title="Click to expand">
+
+```json
+{
+  // Control properties
+  "version": 1,
+  "stage": "RouterResponse",
+  "control": "continue",
+  "id": "1b19c05fdafc521016df33148ad63c1b",
+
+  // Data properties
+  "headers": {
+    "vary": [
+      "origin"
+    ],
+    "content-type": [
+      "application/json"
+    ]
+  },
+  "body": "{
+    \"data\": {
+      \"me\": {
+        \"name\": \"Ada Lovelace\"
+      }
+    }
+  }",
+  "context": {
+    "entries": {
+      "apollo_telemetry::subgraph_metrics_attributes": {},
+      "accepts-json": false,
+      "accepts-multipart": false,
+      "apollo::telemetry::client_name": "manual",
+      "apollo_telemetry::usage_reporting": {
+        "statsReportKey": "# Long\nquery Long{me{name}}",
+        "referencedFieldsByType": {
+          "User": {
+            "fieldNames": [
+              "name"
+            ],
+            "isInterface": false
+          },
+          "Query": {
+            "fieldNames": [
+              "me"
+            ],
+            "isInterface": false
+          }
+        }
+      },
+      "apollo::telemetry::client_version": "",
+      "accepts-wildcard": true
+    }
+  },
+  "statusCode": 200,
+  "sdl": "..." // Omitted due to length
+}
+```
+
+</ExpansionPanel>
+
+### `SupergraphRequest`
+
+<ExpansionPanel title="Click to expand">
+
+```json
+{
+  // Control properties
+  "version": 1,
+  "stage": "SupergraphRequest",
+  "control": "continue",
+
+  // Data properties
+  "headers": {
+    "cookie": ["tasty_cookie=strawberry"],
+    "content-type": ["application/json"],
+    "host": ["127.0.0.1:4000"],
+    "apollo-federation-include-trace": ["ftv1"],
+    "apollographql-client-name": ["manual"],
+    "accept": ["*/*"],
+    "user-agent": ["curl/7.79.1"],
+    "content-length": ["46"]
+  },
+  "body": {
+    "query": "query Long {\n  me {\n  name\n}\n}",
+    "operationName": "MyQuery",
+    "variables": {}
+  },
+  "context": {
+    "entries": {
+      "accepts-json": false,
+      "accepts-wildcard": true,
+      "accepts-multipart": false,
+      "this-is-a-test-context": 42
+    }
+  },
+  "serviceName": "service name shouldn't change",
+  "uri": "http://thisurihaschanged"
+}
+```
+
+</ExpansionPanel>
+
+### `SupergraphResponse`
+
+<ExpansionPanel title="Click to expand">
+
+```json
+{
+  // Control properties
+  "version": 1,
+  "stage": "SupergraphResponse",
+  "control": {
+    "break": 200
+  },
+
+  // Data properties
+  "body": {
+    "errors": [{ "message": "my error message" }]
+  },
+  "context": {
+    "entries": {
+      "testKey": true
+    }
+  },
+  "headers": {
+    "aheader": ["a value"]
+  }
+}
+```
+
+</ExpansionPanel>
+
+### `ExecutionRequest`
+
+<ExpansionPanel title="Click to expand">
+
+```json
+{
+  // Control properties
+  "version": 1,
+  "stage": "ExecutionRequest",
+  "control": "continue",
+
+  // Data properties
+  "headers": {
+    "cookie": ["tasty_cookie=strawberry"],
+    "content-type": ["application/json"],
+    "host": ["127.0.0.1:4000"],
+    "apollo-federation-include-trace": ["ftv1"],
+    "apollographql-client-name": ["manual"],
+    "accept": ["*/*"],
+    "user-agent": ["curl/7.79.1"],
+    "content-length": ["46"]
+  },
+  "body": {
+    "query": "query Long {\n  me {\n  name\n}\n}",
+    "operationName": "MyQuery"
+  },
+  "context": {
+    "entries": {
+      "accepts-json": false,
+      "accepts-wildcard": true,
+      "accepts-multipart": false,
+      "this-is-a-test-context": 42
+    }
+  },
+  "serviceName": "service name shouldn't change",
+  "uri": "http://thisurihaschanged",
+  "queryPlan": {
+    "usage_reporting": {
+      "statsReportKey": "# Me\nquery Me{me{name username}}",
+      "referencedFieldsByType": {
+        "User": { "fieldNames": ["name", "username"], "isInterface": false },
+        "Query": { "fieldNames": ["me"], "isInterface": false }
+      }
+    },
+    "root": {
+      "kind": "Fetch",
+      "serviceName": "accounts",
+      "variableUsages": [],
+      "operation": "query Me__accounts__0{me{name username}}",
+      "operationName": "Me__accounts__0",
+      "operationKind": "query",
+      "id": null,
+      "inputRewrites": null,
+      "outputRewrites": null,
+      "authorization": {
+        "is_authenticated": false,
+        "scopes": [],
+        "policies": []
+      }
+    },
+    "formatted_query_plan": "QueryPlan {\n  Fetch(service: \"accounts\") {\n    {\n      me {\n        name\n        username\n      }\n    }\n  },\n}",
+    "query": {
+      "string": "query Me {\n  me {\n    name\n    username\n  }\n}\n",
+      "fragments": { "map": {} },
+      "operations": [
+        {
+          "name": "Me",
+          "kind": "query",
+          "type_name": "Query",
+          "selection_set": [
+            {
+              "Field": {
+                "name": "me",
+                "alias": null,
+                "selection_set": [
+                  {
+                    "Field": {
+                      "name": "name",
+                      "alias": null,
+                      "selection_set": null,
+                      "field_type": { "Named": "String" },
+                      "include_skip": { "include": "Yes", "skip": "No" }
+                    }
+                  },
+                  {
+                    "Field": {
+                      "name": "username",
+                      "alias": null,
+                      "selection_set": null,
+                      "field_type": { "Named": "String" },
+                      "include_skip": { "include": "Yes", "skip": "No" }
+                    }
+                  }
+                ],
+                "field_type": { "Named": "User" },
+                "include_skip": { "include": "Yes", "skip": "No" }
+              }
+            }
+          ],
+          "variables": {}
+        }
+      ],
+      "subselections": {},
+      "unauthorized": {
+        "paths": [],
+        "errors": { "log": true, "response": "errors" }
+      },
+      "filtered_query": null,
+      "defer_stats": {
+        "has_defer": false,
+        "has_unconditional_defer": false,
+        "conditional_defer_variable_names": []
+      },
+      "is_original": true
+    }
+  }
+}
+```
+
+</ExpansionPanel>
+
+### `ExecutionResponse`
+
+<ExpansionPanel title="Click to expand">
+
+```json
+{
+  // Control properties
+  "version": 1,
+  "stage": "ExecutionResponse",
+  "control": {
+    "break": 200
+  },
+
+  // Data properties
+  "body": {
+    "errors": [{ "message": "my error message" }]
+  },
+  "context": {
+    "entries": {
+      "testKey": true
+    }
+  },
+  "headers": {
+    "aheader": ["a value"]
+  }
+}
+```
+
+</ExpansionPanel>
+
+#### `SubgraphRequest`
+
+<ExpansionPanel title="Click to expand">
+
+```json
+{
+  // Control properties
+  "version": 1,
+  "stage": "SubgraphRequest",
+  "control": "continue",
+  "id": "666d677225c1bc6d7c54a52b409dbd4e",
+  "subgraphRequestId": "b5964998b2394b64a864ef802fb5a4b3",
+
+  // Data properties
+  "headers": {},
+  "body": {
+    "query": "query TopProducts__reviews__1($representations:[_Any!]!){_entities(representations:$representations){...on Product{reviews{body id}}}}",
+    "operationName": "TopProducts__reviews__1",
+    "variables": {
+      "representations": [
+        {
+          "__typename": "Product",
+          "upc": "1"
+        },
+        {
+          "__typename": "Product",
+          "upc": "2"
+        },
+        {
+          "__typename": "Product",
+          "upc": "3"
+        }
+      ]
+    }
+  },
+  "context": {
+    "entries": {
+      "apollo_telemetry::usage_reporting": {
+        "statsReportKey": "# TopProducts\nquery TopProducts{topProducts{name price reviews{body id}}}",
+        "referencedFieldsByType": {
+          "Query": {
+            "fieldNames": ["topProducts"],
+            "isInterface": false
+          },
+          "Review": {
+            "fieldNames": ["body", "id"],
+            "isInterface": false
+          },
+          "Product": {
+            "fieldNames": ["price", "name", "reviews"],
+            "isInterface": false
+          }
+        }
+      },
+      "apollo::telemetry::client_version": "",
+      "apollo_telemetry::subgraph_metrics_attributes": {},
+      "apollo::telemetry::client_name": ""
+    }
+  },
+  "uri": "https://reviews.demo.starstuff.dev/",
+  "method": "POST",
+  "serviceName": "reviews"
+}
+```
+
+</ExpansionPanel>
+
+### `SubgraphResponse`
+
+<ExpansionPanel title="Click to expand">
+
+```json
+{
+  // Control properties
+  "version": 1,
+  "stage": "SubgraphResponse",
+  "id": "b7810c6f7f95640fd6c6c8781e3953c0",
+  "subgraphRequestId": "b5964998b2394b64a864ef802fb5a4b3",
+  "control": "continue",
+
+  // Data properties
+  "headers": {
+    "etag": ["W/\"d3-7aayASjs0+e2c/TpiAYgEu/yyo0\""],
+    "via": ["2 fly.io"],
+    "server": ["Fly/90d459b3 (2023-03-07)"],
+    "date": ["Thu, 09 Mar 2023 14:28:46 GMT"],
+    "x-powered-by": ["Express"],
+    "x-ratelimit-limit": ["10000000"],
+    "access-control-allow-origin": ["*"],
+    "x-ratelimit-remaining": ["9999478"],
+    "content-type": ["application/json; charset=utf-8"],
+    "fly-request-id": ["01GV3CCG5EM3ZNVZD2GH0B00E2-lhr"],
+    "x-ratelimit-reset": ["1678374007"]
+  },
+  "body": {
+    "data": {
+      "_entities": [
+        {
+          "reviews": [
+            {
+              "body": "Love it!",
+              "id": "1"
+            },
+            {
+              "body": "Prefer something else.",
+              "id": "4"
+            }
+          ]
+        },
+        {
+          "reviews": [
+            {
+              "body": "Too expensive.",
+              "id": "2"
+            }
+          ]
+        },
+        {
+          "reviews": [
+            {
+              "body": "Could be better.",
+              "id": "3"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "context": {
+    "entries": {
+      "apollo_telemetry::usage_reporting": {
+        "statsReportKey": "# TopProducts\nquery TopProducts{topProducts{name price reviews{body id}}}",
+        "referencedFieldsByType": {
+          "Product": {
+            "fieldNames": ["price", "name", "reviews"],
+            "isInterface": false
+          },
+          "Query": {
+            "fieldNames": ["topProducts"],
+            "isInterface": false
+          },
+          "Review": {
+            "fieldNames": ["body", "id"],
+            "isInterface": false
+          }
+        }
+      },
+      "apollo::telemetry::client_version": "",
+      "apollo_telemetry::subgraph_metrics_attributes": {},
+      "apollo::telemetry::client_name": ""
+    }
+  },
+  "serviceName": "reviews",
+  "statusCode": 200
+}
+```
+
+</ExpansionPanel>
+
+### `ConnectorRequest`
+
+<ExpansionPanel title="Click to expand">
+
+```json
+{
+  // Control properties
+  "version": 1,
+  "stage": "ConnectorRequest",
+  "control": "continue",
+  "id": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
+
+  // Data properties
+  "headers": {
+    "content-type": ["application/json"],
+    "accept": ["application/json"]
+  },
+  "body": { "query": "query { users { id name } }" },
+  "context": {
+    "entries": {
+      "apollo::supergraph::operation_name": "GetUsers",
+      "apollo::telemetry::client_name": "web-app"
+    }
+  },
+  "uri": "https://api.example.com/v1/users",
+  "method": "GET",
+  "serviceName": "my_subgraph_name.my_source_name"
+}
+```
+
+</ExpansionPanel>
+
+### `ConnectorResponse`
+
+<ExpansionPanel title="Click to expand">
+
+```json
+{
+  // Control properties
+  "version": 1,
+  "stage": "ConnectorResponse",
+  "id": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
+  "control": "continue",
+
+  // Data properties
+  "headers": {
+    "content-type": ["application/json"],
+    "x-request-id": ["req-abc-123"]
+  },
+  "body": {
+    "data": {
+      "users": [
+        { "id": "1", "name": "Ada Lovelace" },
+        { "id": "2", "name": "Grace Hopper" }
+      ]
+    }
+  },
+  "context": {
+    "entries": {
+      "apollo::supergraph::operation_name": "GetUsers",
+      "apollo::telemetry::client_name": "web-app"
+    }
+  },
+  "serviceName": "my_subgraph_name.my_source_name",
+  "statusCode": 200
+}
+```
+
+</ExpansionPanel>

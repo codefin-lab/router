@@ -1,0 +1,769 @@
+// PORT_NOTE: Port of JS `@cacheTag` directive validation, called from `FederationBlueprint#onValidation`
+// in the JS codebase (federation PR #3274). Validates format string, root-field vs entity rules,
+// and key-field-set intersection for entity types.
+use apollo_compiler::Name;
+use apollo_compiler::ast::Type;
+use apollo_compiler::collections::IndexMap;
+use apollo_compiler::executable;
+use apollo_compiler::executable::SelectionSet;
+use apollo_compiler::validation::Valid;
+use itertools::Itertools;
+
+use crate::connectors::ConnectSpec;
+use crate::connectors::SelectionTrie;
+use crate::connectors::StringTemplate;
+use crate::error::FederationError;
+use crate::error::MultipleFederationErrors;
+use crate::error::SingleFederationError;
+use crate::link::federation_spec_definition::CacheTagDirectiveArguments;
+use crate::link::federation_spec_definition::get_federation_spec_definition_from_subgraph;
+use crate::schema::FederationSchema;
+use crate::schema::position::DirectiveTargetPosition;
+use crate::schema::position::ObjectFieldDefinitionPosition;
+use crate::schema::position::ObjectOrInterfaceTypeDefinitionPosition;
+use crate::schema::position::ObjectTypeDefinitionPosition;
+use crate::schema::position::TypeDefinitionPosition;
+
+// `@cacheTag` uses the basic string interpolation from Connect spec v0.2.
+// It doesn't have to be in sync with the latest Connect version.
+const CONNECT_SPEC_FOR_INTERPOLATION: ConnectSpec = ConnectSpec::V0_2;
+
+/// Validates `@cacheTag` directives and pushes any errors into `errors`.
+pub(crate) fn validate_cache_tag_directives(
+    schema: &FederationSchema,
+    errors: &mut MultipleFederationErrors,
+) -> Result<(), FederationError> {
+    validate_cache_tag_directives_inner(schema, errors).map_err(FederationError::from)
+}
+
+fn validate_cache_tag_directives_inner(
+    schema: &FederationSchema,
+    errors: &mut MultipleFederationErrors,
+) -> Result<(), SingleFederationError> {
+    let applications = schema.cache_tag_directive_applications().map_err(|e| {
+        SingleFederationError::InvalidGraphQL {
+            message: e.to_string(),
+        }
+    })?;
+    for application in applications {
+        match application {
+            Ok(cache_tag_directive) => match &cache_tag_directive.target {
+                DirectiveTargetPosition::ObjectField(field) => validate_application_on_field(
+                    schema,
+                    errors,
+                    field,
+                    &cache_tag_directive.arguments,
+                )?,
+                DirectiveTargetPosition::ObjectType(type_pos) => {
+                    validate_application_on_object_type(
+                        schema,
+                        errors,
+                        type_pos,
+                        &cache_tag_directive.arguments,
+                    )?;
+                }
+                _ => {
+                    return Err(SingleFederationError::InvalidGraphQL {
+                        message: "Unexpected directive target".to_string(),
+                    });
+                }
+            },
+            Err(error) => errors.push(error),
+        }
+    }
+    Ok(())
+}
+
+fn validate_application_on_field(
+    schema: &FederationSchema,
+    errors: &mut MultipleFederationErrors,
+    field: &ObjectFieldDefinitionPosition,
+    args: &CacheTagDirectiveArguments,
+) -> Result<(), SingleFederationError> {
+    let _field_def =
+        field
+            .get(schema.schema())
+            .map_err(|e| SingleFederationError::InvalidGraphQL {
+                message: e.to_string(),
+            })?;
+
+    // validate it's on a root field
+    if !schema.is_root_type(&field.type_name) {
+        errors.push(
+            SingleFederationError::CacheTagAppliedToNonRootField {
+                type_name: field.type_name.clone(),
+                field_name: field.field_name.clone(),
+            }
+            .into(),
+        );
+        return Ok(());
+    }
+
+    // validate the arguments
+    validate_args_on_field(schema, errors, field, args)?;
+    Ok(())
+}
+
+fn validate_application_on_object_type(
+    schema: &FederationSchema,
+    errors: &mut MultipleFederationErrors,
+    type_pos: &ObjectTypeDefinitionPosition,
+    args: &CacheTagDirectiveArguments,
+) -> Result<(), SingleFederationError> {
+    // validate the type is a resolvable entity
+    let fed_spec = get_federation_spec_definition_from_subgraph(schema).map_err(|e| {
+        SingleFederationError::InvalidGraphQL {
+            message: e.to_string(),
+        }
+    })?;
+    let key_directive_def = fed_spec.key_directive_definition(schema).map_err(|e| {
+        SingleFederationError::InvalidGraphQL {
+            message: e.to_string(),
+        }
+    })?;
+    let type_def =
+        type_pos
+            .get(schema.schema())
+            .map_err(|e| SingleFederationError::InvalidGraphQL {
+                message: e.to_string(),
+            })?;
+    let is_resolvable = type_def
+        .directives
+        .get_all(&key_directive_def.name)
+        .map(|directive_app| {
+            let key_args = fed_spec
+                .key_directive_arguments(directive_app)
+                .map_err(|e| SingleFederationError::InvalidGraphQL {
+                    message: e.to_string(),
+                })?;
+            Ok::<_, SingleFederationError>(key_args.resolvable)
+        })
+        .process_results(|mut iter| iter.any(|x| x))?;
+    if !is_resolvable {
+        errors.push(
+            SingleFederationError::CacheTagEntityNotResolvable(type_pos.type_name.clone()).into(),
+        );
+        return Ok(());
+    }
+
+    // validate the arguments
+    validate_args_on_object_type(schema, errors, type_pos, args)?;
+    Ok(())
+}
+
+fn validate_args_on_field(
+    schema: &FederationSchema,
+    errors: &mut MultipleFederationErrors,
+    field: &ObjectFieldDefinitionPosition,
+    args: &CacheTagDirectiveArguments,
+) -> Result<(), SingleFederationError> {
+    let field_def =
+        field
+            .get(schema.schema())
+            .map_err(|e| SingleFederationError::InvalidGraphQL {
+                message: e.to_string(),
+            })?;
+    let format = match StringTemplate::parse_with_spec(args.format, CONNECT_SPEC_FOR_INTERPOLATION)
+    {
+        Ok(format) => format,
+        Err(err) => {
+            errors.push(
+                SingleFederationError::CacheTagInvalidFormat {
+                    message: err.to_string(),
+                }
+                .into(),
+            );
+            return Ok(());
+        }
+    };
+    for err in format.expressions().filter_map(|expr| {
+        expr.expression.if_named_else_path(
+            |_named| {
+                Some(
+                    SingleFederationError::CacheTagInvalidFormat {
+                        message: format!("\"{}\"", expr.expression),
+                    }
+                    .into(),
+                )
+            },
+            |path| match path.variable_reference::<String>() {
+                Some(var_ref) => {
+                    // Check the namespace
+                    if var_ref.namespace.namespace != "$args" {
+                        return Some(
+                            SingleFederationError::CacheTagInvalidFormatArgumentOnRootField.into(),
+                        );
+                    }
+
+                    // Check the selection
+                    let fields = field_def
+                        .arguments
+                        .iter()
+                        .map(|arg| (arg.name.clone(), arg.ty.as_ref()))
+                        .collect::<IndexMap<Name, &Type>>();
+                    validate_args_selection(schema, &fields, &var_ref.selection)
+                        .err()
+                        .map(Into::into)
+                }
+                None => None,
+            },
+        )
+    }) {
+        errors.push(err);
+    }
+    Ok(())
+}
+
+/// parent_type_name: The name of the parent composite type; None if selection is a field argument.
+fn validate_args_selection(
+    schema: &FederationSchema,
+    fields: &IndexMap<Name, &Type>,
+    selection: &SelectionTrie,
+) -> Result<(), SingleFederationError> {
+    // Check the format selection is just a single selection. The `StringTemplate` allows multiple
+    // selections like `{$args { a b }}`, but cache tags don't support that.
+    let num_selections = selection.iter().count();
+    if num_selections != 1 {
+        return Err(SingleFederationError::CacheTagInvalidFormat {
+            message: format!(
+                "invalid path element at \"{selection}\", which is not a single selection"
+            ),
+        });
+    }
+    for (key, sel) in selection.iter() {
+        let name = Name::new(key).map_err(|_| SingleFederationError::CacheTagInvalidFormat {
+            message: format!("invalid field selection name \"{key}\""),
+        })?;
+        let field =
+            fields
+                .get(&name)
+                .ok_or_else(|| SingleFederationError::CacheTagInvalidFormat {
+                    message: format!("unknown field \"{name}\""),
+                })?;
+
+        let type_name = field.inner_named_type();
+        let type_def = schema.get_type(type_name.clone()).map_err(|e| {
+            SingleFederationError::InvalidGraphQL {
+                message: e.to_string(),
+            }
+        })?;
+        if !sel.is_leaf() {
+            let type_def = ObjectOrInterfaceTypeDefinitionPosition::try_from(type_def).map_err(
+                |_| SingleFederationError::CacheTagInvalidFormat {
+                    message: format!(
+                        "invalid path element \"{name}\", which is not an object or interface type"
+                    ),
+                },
+            )?;
+            let next_fields = type_def
+                .fields(schema.schema())
+                .map_err(|e| SingleFederationError::InvalidGraphQL {
+                    message: e.to_string(),
+                })?
+                .map(|field_pos| {
+                    let field_def = field_pos.get(schema.schema()).map_err(|e| {
+                        SingleFederationError::InvalidGraphQL {
+                            message: e.to_string(),
+                        }
+                    })?;
+                    Ok::<_, SingleFederationError>((field_pos.field_name().clone(), &field_def.ty))
+                })
+                .collect::<Result<IndexMap<_, _>, _>>()?;
+            validate_args_selection(schema, &next_fields, sel)?;
+        } else {
+            // A leaf field must not be a list.
+            if field.is_list() {
+                return Err(SingleFederationError::CacheTagInvalidFormat {
+                    message: format!("invalid path ending at \"{name}\", which is a list type"),
+                });
+            }
+            // A leaf field should have a scalar type.
+            if !matches!(
+                &type_def,
+                TypeDefinitionPosition::Scalar(_) | TypeDefinitionPosition::Enum(_)
+            ) {
+                return Err(SingleFederationError::CacheTagInvalidFormat {
+                    message: format!(
+                        "invalid path ending at \"{name}\", which is not a scalar type or an enum"
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_args_on_object_type(
+    schema: &FederationSchema,
+    errors: &mut MultipleFederationErrors,
+    type_pos: &ObjectTypeDefinitionPosition,
+    args: &CacheTagDirectiveArguments,
+) -> Result<(), SingleFederationError> {
+    let _type_def =
+        type_pos
+            .get(schema.schema())
+            .map_err(|e| SingleFederationError::InvalidGraphQL {
+                message: e.to_string(),
+            })?;
+    let format = match StringTemplate::parse_with_spec(args.format, CONNECT_SPEC_FOR_INTERPOLATION)
+    {
+        Ok(format) => format,
+        Err(err) => {
+            errors.push(
+                SingleFederationError::CacheTagInvalidFormat {
+                    message: err.to_string(),
+                }
+                .into(),
+            );
+            return Ok(());
+        }
+    };
+    let mut format_selections = Vec::new();
+    let mut has_error = false;
+    for item in format.expressions().filter_map(|expr| {
+        expr.expression.if_named_else_path(
+            |_named| {
+                Some(Err(SingleFederationError::CacheTagInvalidFormat {
+                    message: format!("\"{}\"", expr.expression),
+                }
+                .into()))
+            },
+            |path| match path.variable_reference::<String>() {
+                Some(var_ref) => {
+                    // Check the namespace
+                    if var_ref.namespace.namespace != "$key" {
+                        return Some(Err(
+                            SingleFederationError::CacheTagInvalidFormatArgumentOnEntity {
+                                type_name: type_pos.type_name.clone(),
+                                format: format.to_string(),
+                            }
+                            .into(),
+                        ));
+                    }
+
+                    // Build the selection set based on what's in the variable, so if it's
+                    // $key.a.b it will generate { a { b } }
+                    let mut selection_set = SelectionSet::new(type_pos.type_name.clone());
+                    match build_selection_set(&mut selection_set, schema, &var_ref.selection) {
+                        Ok(_) => Some(Ok(selection_set)),
+                        Err(err) => Some(Err(err.into())),
+                    }
+                }
+                None => None,
+            },
+        )
+    }) {
+        match item {
+            Ok(sel) => format_selections.push(executable::FieldSet {
+                selection_set: sel,
+                sources: Default::default(),
+            }),
+            Err(err) => {
+                has_error = true;
+                errors.push(err);
+            }
+        }
+    }
+    if has_error {
+        return Ok(());
+    }
+
+    // Check if all field sets coming from all collected StringTemplate ($key.a.b) from cacheTag
+    // directives are each a subset of each entity keys
+    let entity_key_field_sets = get_entity_key_field_sets(schema, type_pos)?;
+    let is_correct = format_selections.into_iter().all(|format_field_set| {
+        entity_key_field_sets.iter().all(|key_field_set| {
+            crate::connectors::field_set_is_subset(&format_field_set, key_field_set)
+        })
+    });
+
+    if !is_correct {
+        errors.push(
+            SingleFederationError::CacheTagInvalidFormatArgumentOnEntity {
+                type_name: type_pos.type_name.clone(),
+                format: format.to_string(),
+            }
+            .into(),
+        );
+    }
+    Ok(())
+}
+
+fn get_entity_key_field_sets(
+    schema: &FederationSchema,
+    type_pos: &ObjectTypeDefinitionPosition,
+) -> Result<Vec<executable::FieldSet>, SingleFederationError> {
+    let fed_spec = get_federation_spec_definition_from_subgraph(schema).map_err(|e| {
+        SingleFederationError::InvalidGraphQL {
+            message: e.to_string(),
+        }
+    })?;
+    let key_directive_def = fed_spec.key_directive_definition(schema).map_err(|e| {
+        SingleFederationError::InvalidGraphQL {
+            message: e.to_string(),
+        }
+    })?;
+    let type_def =
+        type_pos
+            .get(schema.schema())
+            .map_err(|e| SingleFederationError::InvalidGraphQL {
+                message: e.to_string(),
+            })?;
+    type_def
+        .directives
+        .get_all(&key_directive_def.name)
+        .map(|directive_app| {
+            let key_args = fed_spec
+                .key_directive_arguments(directive_app)
+                .map_err(|e| SingleFederationError::InvalidGraphQL {
+                    message: e.to_string(),
+                })?;
+            executable::FieldSet::parse(
+                Valid::assume_valid_ref(schema.schema()),
+                type_pos.type_name.clone(),
+                key_args.fields,
+                "field_set",
+            )
+            .map_err(|err| SingleFederationError::InvalidGraphQL {
+                message: format!("cannot parse field set for entity keys: {err}"),
+            })
+        })
+        .process_results(|iter| iter.collect())
+}
+
+/// Build the selection set based on what's in the variable, so if it's $key.a.b it will generate { a { b } }
+fn build_selection_set(
+    selection_set: &mut SelectionSet,
+    schema: &FederationSchema,
+    selection: &SelectionTrie,
+) -> Result<(), SingleFederationError> {
+    // Check the format selection is just a single selection. The `StringTemplate` allows multiple
+    // selections like `{$key { a b }}`, but cache tags don't support that.
+    let num_selections = selection.iter().count();
+    if num_selections != 1 {
+        return Err(SingleFederationError::CacheTagInvalidFormat {
+            message: format!(
+                "invalid path element at \"{selection}\", which is not a single selection"
+            ),
+        });
+    }
+    for (key, sel) in selection.iter() {
+        let name = Name::new(key).map_err(|_| SingleFederationError::CacheTagInvalidFormat {
+            message: format!("invalid field selection name \"{key}\""),
+        })?;
+        let mut new_field = selection_set
+            .new_field(schema.schema(), name.clone())
+            .map_err(|_| SingleFederationError::CacheTagInvalidFormat {
+                message: format!("cannot create selection set with \"{key}\""),
+            })?;
+        let new_field_type_def = schema
+            .get_type(new_field.ty().inner_named_type().clone())
+            .map_err(|e| SingleFederationError::InvalidGraphQL {
+                message: e.to_string(),
+            })?;
+
+        if !sel.is_leaf() {
+            ObjectOrInterfaceTypeDefinitionPosition::try_from(new_field_type_def).map_err(
+                |_| SingleFederationError::CacheTagInvalidFormat {
+                    message: format!(
+                        "invalid path element \"{name}\", which is not an object or interface type"
+                    ),
+                },
+            )?;
+            build_selection_set(&mut new_field.selection_set, schema, sel)?;
+        } else {
+            // A leaf field must not be a list.
+            if new_field.ty().is_list() {
+                return Err(SingleFederationError::CacheTagInvalidFormat {
+                    message: format!("invalid path ending at \"{name}\", which is a list type"),
+                });
+            }
+            // A leaf field should have a scalar type.
+            if !matches!(
+                &new_field_type_def,
+                TypeDefinitionPosition::Scalar(_) | TypeDefinitionPosition::Enum(_)
+            ) {
+                return Err(SingleFederationError::CacheTagInvalidFormat {
+                    message: format!(
+                        "invalid path ending at \"{name}\", which is not a scalar type or an enum"
+                    ),
+                });
+            }
+        }
+        selection_set.push(new_field);
+    }
+
+    Ok(())
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// Unit tests
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::subgraph::test_utils::BuildOption;
+    use crate::subgraph::test_utils::build_inner_expanded;
+
+    #[test]
+    fn test_api_test() {
+        const SCHEMA: &str = r#"
+            type Product @key(fields: "upc")
+                         @cacheTag(format: "{ namedField }")
+                         @cacheTag(format: "{$args}")
+            {
+                upc: String!
+                name: String
+            }
+
+            type Query {
+                topProducts(first: Int = 5): [Product]
+                    @cacheTag(format: "{$this}")
+                    @cacheTag(format: "{$key}")
+            }
+        "#;
+
+        let subgraph = build_inner_expanded(SCHEMA, BuildOption::AsFed2).unwrap();
+        let mut errors = MultipleFederationErrors::new();
+        validate_cache_tag_directives(subgraph.schema(), &mut errors).unwrap();
+        assert_eq!(
+            errors
+                .errors
+                .iter()
+                .map(|e| e.code().definition().code().to_string())
+                .collect::<Vec<_>>(),
+            vec![
+                "CACHE_TAG_INVALID_FORMAT",
+                "CACHE_TAG_INVALID_FORMAT_ARGUMENT_ON_ENTITY",
+                "CACHE_TAG_INVALID_FORMAT_ARGUMENT_ON_ROOT_FIELD",
+                "CACHE_TAG_INVALID_FORMAT_ARGUMENT_ON_ROOT_FIELD",
+            ],
+        );
+    }
+
+    #[track_caller]
+    fn build_and_validate(schema: &str) {
+        let subgraph = build_inner_expanded(schema, BuildOption::AsFed2).unwrap();
+        let mut errors = MultipleFederationErrors::new();
+        validate_cache_tag_directives(subgraph.schema(), &mut errors).unwrap();
+        if !errors.errors.is_empty() {
+            for error in &errors.errors {
+                println!("Error: {}", error);
+            }
+        }
+        assert!(errors.errors.is_empty());
+    }
+
+    #[track_caller]
+    fn build_for_errors(schema: &str) -> Vec<String> {
+        let subgraph = build_inner_expanded(schema, BuildOption::AsFed2).unwrap();
+        let mut errors = MultipleFederationErrors::new();
+        validate_cache_tag_directives(subgraph.schema(), &mut errors).unwrap();
+        errors.errors.iter().map(|e| e.to_string()).collect()
+    }
+
+    #[test]
+    fn test_valid_format_string() {
+        const SCHEMA: &str = r#"
+            type Product @key(fields: "upc age")
+                         @cacheTag(format: "product-{$key.upc}")
+            {
+                upc: String!
+                age: Int!
+                name: String
+            }
+
+            enum Country {
+                BE
+                FR
+            }
+
+            type Query {
+                topProducts(first: Int! = 5): [Product]
+                    @cacheTag(format: "topProducts")
+                    @cacheTag(format: "topProducts-{$args.first}")
+                topProductsByCountry(first: Int! = 5, country: Country!): [Product]
+                    @cacheTag(format: "topProducts")
+                    @cacheTag(format: "topProducts-{$args.first}-{$args.country}")
+            }
+
+            type Test @key(fields: "id country") @cacheTag(format: "test-{$key.id}-{$key.country}") {
+                id: ID!
+                country: Country!
+            }
+        "#;
+        build_and_validate(SCHEMA);
+    }
+
+    #[test]
+    fn test_valid_format_string_nullable_args() {
+        const SCHEMA: &str = r#"
+            type Product @key(fields: "upc name")
+                         @cacheTag(format: "product-{$key.upc}-{$key.name}")
+            {
+                upc: String!
+                name: String
+            }
+
+            type Query {
+                topProducts(first: Int): [Product]
+                    @cacheTag(format: "topProducts")
+                    @cacheTag(format: "topProducts-{$args.first}")
+            }
+        "#;
+        build_and_validate(SCHEMA);
+    }
+
+    #[test]
+    fn test_invalid_format_string_list_args() {
+        const SCHEMA: &str = r#"
+            type Product @key(fields: "upc names")
+                         @cacheTag(format: "product-{$key.upc}-{$key.names}")
+            {
+                upc: String!
+                names: [String!]!
+            }
+
+            type Query {
+                topProducts(groups: [Int!]!): [Product]
+                    @cacheTag(format: "topProducts")
+                    @cacheTag(format: "topProducts-{$args.groups}")
+            }
+        "#;
+        assert_eq!(
+            build_for_errors(SCHEMA),
+            vec![
+                "cacheTag format is invalid: invalid path ending at \"names\", which is a list type",
+                "cacheTag format is invalid: invalid path ending at \"groups\", which is a list type",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_invalid_format_selection() {
+        const SCHEMA: &str = r#"
+            type Product @key(fields: "upc")
+                         @cacheTag(format: "{ namedField }")
+                         @cacheTag(format: "{$args}")
+            {
+                upc: String!
+                name: String
+            }
+
+            type Query {
+                topProducts(first: Int = 5): [Product]
+                    @cacheTag(format: "{$this}")
+                    @cacheTag(format: "{$key}")
+            }
+        "#;
+        assert_eq!(
+            build_for_errors(SCHEMA),
+            vec![
+                "cacheTag format is invalid: \"namedField\"",
+                "cacheTag applied on types can only reference arguments in format using $key",
+                "cacheTag applied on root fields can only reference arguments in format using $args",
+                "cacheTag applied on root fields can only reference arguments in format using $args",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_invalid_format_path_selection() {
+        const SCHEMA: &str = r#"
+            type Test {
+                a: Int!
+                b: Int!
+                c: Int
+            }
+
+            type Product @key(fields: "upc test { a c }")
+                         @cacheTag(format: "product-{$key.somethingElse}")
+                         @cacheTag(format: "product-{$key.test}")
+                         @cacheTag(format: "product-{$key.test.a}")
+                         @cacheTag(format: "product-{$key.test.b}")
+                         @cacheTag(format: "product-{$key.test.c}")
+            {
+                upc: String!
+                test: Test!
+                name: String
+            }
+
+            type Query {
+                topProducts(first: Int = 5): [Product]
+                    @cacheTag(format: "topProducts")
+                    @cacheTag(format: "topProducts-{$args { second }}")
+            }
+        "#;
+        assert_eq!(
+            build_for_errors(SCHEMA),
+            vec![
+                "cacheTag format is invalid: cannot create selection set with \"somethingElse\"",
+                "cacheTag format is invalid: invalid path ending at \"test\", which is not a scalar type or an enum",
+                "cacheTag applied on types can only reference arguments in format using $key",
+                "cacheTag format is invalid: unknown field \"second\""
+            ]
+        );
+    }
+
+    #[test]
+    fn test_invalid_format_string_multiple_selections() {
+        const SCHEMA: &str = r#"
+            type Product @key(fields: "upc name")
+                         @cacheTag(format: "product-{$key { upc name }}")
+                         @cacheTag(format: "product-{$key {}}")
+            {
+                upc: String!
+                name: String
+            }
+
+            type Query {
+                topProducts(first: Int): [Product]
+                    @cacheTag(format: "topProducts")
+                    @cacheTag(format: "topProducts-{$args { first country }}")
+            }
+        "#;
+        assert_eq!(
+            build_for_errors(SCHEMA),
+            vec![
+                "cacheTag format is invalid: invalid path element at \"upc name\", which is not a single selection",
+                "cacheTag format is invalid: invalid path element at \"\", which is not a single selection",
+                "cacheTag format is invalid: invalid path element at \"first country\", which is not a single selection",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_valid_format_string_multiple_keys() {
+        const SCHEMA: &str = r#"
+            type Product @key(fields: "upc x")
+                         @key(fields: "upc y")
+                         @cacheTag(format: "product-{$key.upc}")
+            {
+                upc: String!
+                x: Int!
+                y: Int!
+                name: String
+            }
+        "#;
+        build_and_validate(SCHEMA);
+    }
+
+    #[test]
+    fn test_invalid_format_string_multiple_keys() {
+        const SCHEMA: &str = r#"
+            type Product @key(fields: "upc x")
+                         @key(fields: "upc y")
+                         @cacheTag(format: "product-{$key.x}")
+            {
+                upc: String!
+                x: Int!
+                y: Int!
+                name: String
+            }
+        "#;
+        assert_eq!(
+            build_for_errors(SCHEMA),
+            vec!["cacheTag applied on types can only reference arguments in format using $key"]
+        );
+    }
+}

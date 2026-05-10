@@ -1,0 +1,148 @@
+use std::collections::BTreeMap;
+use std::env;
+
+use opentelemetry::KeyValue;
+use opentelemetry_sdk::Resource;
+use opentelemetry_sdk::resource::EnvResourceDetector;
+use opentelemetry_sdk::resource::ResourceDetector;
+
+use crate::plugins::telemetry::config::AttributeValue;
+const UNKNOWN_SERVICE: &str = "unknown_service";
+const OTEL_SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
+
+/// Resource detector that adds a default service name,
+/// which is normally expected to be overwritten by other detectors.
+struct DefaultServiceNameDetector;
+impl ResourceDetector for DefaultServiceNameDetector {
+    fn detect(&self) -> Resource {
+        let executable_name = executable_name();
+        let default_service_name = executable_name
+            .map(|name| format!("{UNKNOWN_SERVICE}:{name}"))
+            .unwrap_or_else(|| UNKNOWN_SERVICE.to_string());
+        Resource::builder_empty()
+            .with_attribute(KeyValue::new(
+                opentelemetry_semantic_conventions::resource::SERVICE_NAME,
+                default_service_name,
+            ))
+            .build()
+    }
+}
+
+/// This resource detector fills out things like the default service version and executable name.
+/// Users can always override them via config.
+struct StaticResourceDetector;
+impl ResourceDetector for StaticResourceDetector {
+    fn detect(&self) -> Resource {
+        let mut config_resources = vec![];
+        config_resources.push(KeyValue::new(
+            opentelemetry_semantic_conventions::resource::SERVICE_VERSION,
+            std::env!("CARGO_PKG_VERSION"),
+        ));
+
+        // Some other basic resources
+        if let Some(executable_name) = executable_name() {
+            config_resources.push(KeyValue::new(
+                opentelemetry_semantic_conventions::resource::PROCESS_EXECUTABLE_NAME,
+                executable_name,
+            ));
+        }
+        Resource::builder_empty()
+            .with_attributes(config_resources)
+            .build()
+    }
+}
+
+struct EnvServiceNameDetector;
+// Used instead of SdkProvidedResourceDetector
+impl ResourceDetector for EnvServiceNameDetector {
+    fn detect(&self) -> Resource {
+        match env::var(OTEL_SERVICE_NAME) {
+            Ok(service_name) if !service_name.is_empty() => Resource::builder_empty()
+                .with_attribute(KeyValue::new(
+                    opentelemetry_semantic_conventions::resource::SERVICE_NAME,
+                    service_name,
+                ))
+                .build(),
+            Ok(_) | Err(_) => Resource::builder_empty().build(), // return empty resource
+        }
+    }
+}
+
+#[allow(missing_docs)] // only public-but-hidden for tests
+pub trait ConfigResource {
+    fn service_name(&self) -> &Option<String>;
+    fn service_namespace(&self) -> &Option<String>;
+
+    fn resource(&self) -> &BTreeMap<String, AttributeValue>;
+
+    fn to_resource(&self) -> Resource {
+        let config_resource_detector = ConfigResourceDetector {
+            service_name: self.service_name().clone(),
+            service_namespace: self.service_namespace().clone(),
+            resources: self.resource().clone(),
+        };
+        // Last one wins
+        let detectors: Vec<Box<dyn ResourceDetector>> = vec![
+            Box::new(DefaultServiceNameDetector),
+            Box::new(StaticResourceDetector),
+            Box::new(config_resource_detector),
+            Box::new(EnvResourceDetector::new()),
+            Box::new(EnvServiceNameDetector),
+        ];
+        Resource::builder_empty().with_detectors(&detectors).build()
+    }
+}
+
+fn executable_name() -> Option<String> {
+    std::env::current_exe().ok().and_then(|path| {
+        path.file_name()
+            .and_then(|p| p.to_str().map(|s| s.to_string()))
+    })
+}
+
+struct ConfigResourceDetector {
+    service_name: Option<String>,
+    service_namespace: Option<String>,
+    resources: BTreeMap<String, AttributeValue>,
+}
+
+impl ResourceDetector for ConfigResourceDetector {
+    fn detect(&self) -> Resource {
+        let mut config_resources = vec![];
+
+        // For config resources last entry wins
+        for (key, value) in self.resources.iter() {
+            config_resources.push(KeyValue::new(key.clone(), value.clone()));
+        }
+
+        // Service namespace
+        if let Some(service_namespace) = self.service_namespace.clone() {
+            config_resources.push(KeyValue::new(
+                opentelemetry_semantic_conventions::resource::SERVICE_NAMESPACE,
+                service_namespace.to_string(),
+            ));
+        }
+
+        if let Some(service_name) = self.service_name.clone().or_else(|| {
+            // Yaml resources
+            if let Some(AttributeValue::String(name)) = self
+                .resources
+                .get(opentelemetry_semantic_conventions::resource::SERVICE_NAME)
+            {
+                Some(name.clone())
+            } else {
+                None
+            }
+        }) {
+            config_resources.push(KeyValue::new(
+                opentelemetry_semantic_conventions::resource::SERVICE_NAME,
+                service_name.to_string(),
+            ));
+        }
+        Resource::builder_empty()
+            .with_attributes(config_resources)
+            .build()
+    }
+}
+
+// Tests in apollo-router/tests/telemetry_resource_tests.rs

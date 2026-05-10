@@ -1,0 +1,30 @@
+---
+source: apollo-router/src/services/supergraph/tests.rs
+assertion_line: 1679
+expression: deferred
+---
+{
+  "hasNext": true,
+  "incremental": [
+    {
+      "data": {
+        "org": null
+      },
+      "path": [
+        "currentUser"
+      ],
+      "extensions": {
+        "valueCompletion": [
+          {
+            "message": "Null value found for non-nullable type ID",
+            "path": [
+              "currentUser",
+              "org",
+              "nonNullId"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

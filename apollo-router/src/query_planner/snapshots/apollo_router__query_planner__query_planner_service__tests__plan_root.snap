@@ -1,0 +1,26 @@
+---
+source: apollo-router/src/query_planner/query_planner_service.rs
+expression: plan.root
+---
+Fetch(
+    FetchNode {
+        service_name: "accounts",
+        requires: [],
+        variable_usages: [],
+        operation: "{ me { name { first last } } }",
+        operation_name: None,
+        operation_kind: Query,
+        id: None,
+        input_rewrites: None,
+        output_rewrites: None,
+        context_rewrites: None,
+        schema_aware_hash: QueryHash(
+            "85c3a9b70e06cc27df05588a9af20b382300cf9fbc62fb45f58fd46fb71dfe1b",
+        ),
+        authorization: CacheKeyMetadata {
+            is_authenticated: false,
+            scopes: [],
+            policies: [],
+        },
+    },
+)

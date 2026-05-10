@@ -1,0 +1,23 @@
+---
+source: apollo-router/src/services/supergraph/tests.rs
+assertion_line: 435
+expression: response
+---
+{
+  "data": {
+    "currentUser": {
+      "activeOrganization": null
+    }
+  },
+  "extensions": {
+    "valueCompletion": [
+      {
+        "message": "Null value found for non-nullable type ID",
+        "path": [
+          "currentUser",
+          "activeOrganization"
+        ]
+      }
+    ]
+  }
+}

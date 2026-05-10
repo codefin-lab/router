@@ -1,0 +1,28 @@
+---
+title: Federation Version Support
+subtitle: Check router version compatibility with Apollo Federation versions
+description: This reference explains how to check that your router uses at least the minimum required federation version.
+---
+
+The GraphOS Router and Apollo Router Core support supergraph schemas that are generated via Apollo Federation 2.x [composition](/federation/federated-types/composition/). This composition algorithm can be performed by Apollo GraphOS Studio, the Rover CLI, or the Apollo GraphOS Platform API.
+
+Apollo Federation is an evolving project, and its composition algorithm regularly receives new features and bug fixes.
+
+<Tip>
+
+Update your router regularly to the latest stable version to ensure that it fully supports its supergraph schema.
+
+</Tip>
+
+## Checking version compatibility
+
+To ensure your router's federation version is supported, check the [Apollo Federation Changelog](/graphos/schema-design/federated-schemas/reference/versions). Make sure that your router's federation version is _at least_ as recent as the version used to compose your supergraph schema.
+
+## Federation 1 support
+
+Only Apollo Router Core and GraphOS Router v1.59 and earlier support Federation v1.x supergraphs. The following _don't_ support Federation v1.x:
+
+- Router v1.60 and later
+- Router v2.0 and later
+
+[Learn how to upgrade from Federation version 1 to 2.](/graphos/schema-design/federated-schemas/reference/moving-to-federation-2)

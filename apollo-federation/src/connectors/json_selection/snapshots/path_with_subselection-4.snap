@@ -1,0 +1,12 @@
+---
+source: apollo-federation/src/connectors/json_selection/parser.rs
+expression: "JSONSelection::parse(r#\"\n            id\n            created\n            choices->first.message\n            model\n        \"#)"
+---
+Err(
+    JSONSelectionParseError {
+        message: "SubSelection cannot contain multiple elements if it contains an anonymous NamedSelection",
+        fragment: "\n            id\n            created\n            choices->first.message\n            model\n        ",
+        offset: 0,
+        spec: V0_3,
+    },
+)

@@ -1,0 +1,12 @@
+supergraph:
+  listen: 127.0.0.1:44167
+limits:
+  router:
+    parser_max_recursion: ${env.PARSER_MAX_RECURSION}
+include_subgraph_errors:
+  all: true
+headers:
+  all:
+    request:
+      - propagate:
+          named: fibonacci-iterations

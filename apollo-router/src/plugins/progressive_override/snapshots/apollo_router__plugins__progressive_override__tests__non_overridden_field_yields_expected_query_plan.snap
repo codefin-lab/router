@@ -1,0 +1,43 @@
+---
+source: apollo-router/src/plugins/progressive_override/tests.rs
+expression: query_plan
+---
+{
+  "data": null,
+  "errors": [
+    {
+      "message": "subgraph mock not configured",
+      "path": [],
+      "extensions": {
+        "code": "SUBGRAPH_MOCK_NOT_CONFIGURED",
+        "service": "Subgraph2"
+      }
+    }
+  ],
+  "extensions": {
+    "apolloQueryPlan": {
+      "object": {
+        "kind": "QueryPlan",
+        "node": {
+          "kind": "Fetch",
+          "serviceName": "Subgraph2",
+          "variableUsages": [],
+          "operation": "{ percent0 { foo } }",
+          "operationName": null,
+          "operationKind": "query",
+          "id": null,
+          "inputRewrites": null,
+          "outputRewrites": null,
+          "contextRewrites": null,
+          "schemaAwareHash": "635c2463fc006b45a39cb844c56ca5e1eebe2ffd856c170e4b247b49f7d647e1",
+          "authorization": {
+            "is_authenticated": false,
+            "scopes": [],
+            "policies": []
+          }
+        }
+      },
+      "text": "QueryPlan {\n  Fetch(service: \"Subgraph2\") {\n    {\n      percent0 {\n        foo\n      }\n    }\n  },\n}"
+    }
+  }
+}

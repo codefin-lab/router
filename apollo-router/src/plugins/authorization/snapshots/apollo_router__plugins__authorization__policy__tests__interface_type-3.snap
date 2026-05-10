@@ -1,0 +1,32 @@
+---
+source: apollo-router/src/plugins/authorization/policy.rs
+assertion_line: 1237
+expression: "TestResult\n{\n    query: QUERY2, extracted_policies: &extracted_policies,\n    successful_policies:\n    [\"itf\".to_string(), \"a\".to_string()].into_iter().collect(), result: doc,\n    paths\n}"
+---
+query:
+
+        query {
+            test
+            itf {
+                ... on A {
+                    id
+                }
+                ... on B {
+                    id
+                }
+            }
+        }
+        
+extracted_policies: {"a", "b"}
+successful policies: ["a"]
+filtered:
+{
+  test
+  itf {
+    ... on A {
+      id
+    }
+  }
+}
+
+paths: ["/itf/... on B"]

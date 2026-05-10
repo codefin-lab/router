@@ -1,0 +1,538 @@
+use apollo_federation::subgraph::typestate::Subgraph;
+use insta::assert_snapshot;
+
+use super::ServiceDefinition;
+use super::compose;
+use super::compose_as_fed2_subgraphs;
+use super::print_sdl;
+
+// =============================================================================
+// MISCELLANEOUS COMPOSITION TESTS - Standalone composition behavior tests
+// =============================================================================
+
+/// Invalid `{}` on inputs with required fields (e.g. `AuditsFilterV2`) must not appear on the
+/// composed supergraph, matching `FED-1001.graphql` / graphql-js `printSchema`. Valid `{}` on
+/// all-optional inputs is kept; see `misc_preserves_empty_object_default_when_only_some_subgraphs_declare_it`.
+#[test]
+fn misc_strips_invalid_empty_object_argument_defaults_on_supergraph() {
+    let subgraph = ServiceDefinition {
+        name: "subgraph",
+        type_defs: r#"
+        type Query {
+          audits(filter: AuditsFilterV2 = {}): String
+          carriers(filter: CarriersFilterV2 = {}): String
+        }
+
+        input AuditsFilterV2 {
+          startDate: String!
+          endDate: String!
+          carrierId: String!
+        }
+
+        input CarriersFilterV2 {
+          code: String
+        }
+        "#,
+    };
+
+    let supergraph = compose_as_fed2_subgraphs(&[subgraph]).expect("composition should succeed");
+    let sdl = print_sdl(supergraph.schema().schema());
+
+    assert!(
+        !sdl.contains("filter: AuditsFilterV2 = {}"),
+        "supergraph should omit invalid empty-object default for AuditsFilterV2 (FED-1001), got:\n{sdl}"
+    );
+    assert!(
+        sdl.contains("filter: CarriersFilterV2 = {}"),
+        "supergraph should keep valid empty-object default when all input fields are optional, got:\n{sdl}"
+    );
+}
+
+#[test]
+fn misc_preserves_empty_object_default_when_only_some_subgraphs_declare_it() {
+    let with_default = ServiceDefinition {
+        name: "withDefault",
+        type_defs: r#"
+        type Query {
+          q: Int @shareable
+        }
+
+        type Thing @shareable {
+          f(filter: CarriersFilterV2 = {}): String
+        }
+
+        input CarriersFilterV2 {
+          code: String
+        }
+        "#,
+    };
+    let without_default = ServiceDefinition {
+        name: "withoutDefault",
+        type_defs: r#"
+        type Query {
+          q: Int @shareable
+        }
+
+        type Thing @shareable {
+          f(filter: CarriersFilterV2): String
+        }
+
+        input CarriersFilterV2 {
+          code: String
+        }
+        "#,
+    };
+
+    let supergraph = compose_as_fed2_subgraphs(&[with_default, without_default])
+        .expect("composition should succeed");
+    let sdl = print_sdl(supergraph.schema().schema());
+    assert!(
+        sdl.contains("filter: CarriersFilterV2 = {}"),
+        "supergraph should keep `= {{}}` when at least one subgraph declares it and the default is valid, got:\n{sdl}"
+    );
+}
+
+#[test]
+fn misc_works_with_normal_graphql_type_extension_when_definition_is_empty() {
+    let subgraph_a = ServiceDefinition {
+        name: "subgraphA",
+        type_defs: r#"
+        type Query {
+          foo: Foo
+        }
+
+        type Foo
+
+        extend type Foo {
+          bar: String
+        }
+        "#,
+    };
+
+    // NOTE: This test uses composeServices() in JS (Fed1), not composeAsFed2Subgraphs()
+    // For now, using Fed2 composition as the equivalent
+    let result = compose_as_fed2_subgraphs(&[subgraph_a]);
+    let _supergraph =
+        result.expect("Expected composition to succeed with empty type definition + extension");
+}
+
+#[test]
+fn misc_handles_fragments_in_requires_using_inaccessible_types() {
+    let subgraph_a = ServiceDefinition {
+        name: "subgraphA",
+        type_defs: r#"
+        type Query @shareable {
+          dummy: Entity
+        }
+
+        type Entity @key(fields: "id") {
+          id: ID!
+          data: Foo
+        }
+
+        interface Foo {
+          foo: String!
+        }
+
+        interface Bar implements Foo {
+          foo: String!
+          bar: String!
+        }
+
+        type Baz implements Foo & Bar @shareable {
+          foo: String!
+          bar: String!
+          baz: String!
+        }
+
+        type Qux implements Foo & Bar @shareable {
+          foo: String!
+          bar: String!
+          qux: String!
+        }
+        "#,
+    };
+
+    let subgraph_b = ServiceDefinition {
+        name: "subgraphB",
+        type_defs: r#"
+        type Query @shareable {
+          dummy: Entity
+        }
+
+        type Entity @key(fields: "id") {
+          id: ID!
+          data: Foo @external
+          requirer: String! @requires(fields: "data { foo ... on Bar { bar ... on Baz { baz } ... on Qux { qux } } }")
+        }
+
+        interface Foo {
+          foo: String!
+        }
+
+        interface Bar implements Foo {
+          foo: String!
+          bar: String!
+        }
+
+        type Baz implements Foo & Bar @shareable @inaccessible {
+          foo: String!
+          bar: String!
+          baz: String!
+        }
+
+        type Qux implements Foo & Bar @shareable {
+          foo: String!
+          bar: String!
+          qux: String!
+        }
+        "#,
+    };
+
+    let result = compose_as_fed2_subgraphs(&[subgraph_a, subgraph_b]);
+    let supergraph = result.expect(
+        "Expected composition to succeed with @requires fragments using @inaccessible types",
+    );
+    let api_schema = supergraph
+        .to_api_schema(Default::default())
+        .expect("Expected API schema generation to succeed");
+
+    // Validate that @inaccessible type Baz is excluded from API schema but Qux is included
+    assert_snapshot!(print_sdl(api_schema.schema()), @r###"
+    interface Bar implements Foo {
+      foo: String!
+      bar: String!
+    }
+
+    type Entity {
+      id: ID!
+      data: Foo
+      requirer: String!
+    }
+
+    interface Foo {
+      foo: String!
+    }
+
+    type Query {
+      dummy: Entity
+    }
+
+    type Qux implements Foo & Bar {
+      foo: String!
+      bar: String!
+      qux: String!
+    }
+    "###);
+}
+
+#[test]
+fn misc_existing_authenticated_directive_with_fed1() {
+    let subgraph_a = Subgraph::parse(
+        "subgraphA",
+        "http://subgraphA",
+        r#"
+        directive @authenticated(scope: [String!]) repeatable on FIELD_DEFINITION
+
+        extend type Foo @key(fields: "id") {
+          id: ID!
+          name: String! @authenticated(scope: ["read:foo"])
+        }
+        "#,
+    )
+    .expect("valid subgraph");
+
+    let subgraph_b = Subgraph::parse(
+        "subgraphB",
+        "http://subgraphB",
+        r#"
+        type Query {
+          foo: Foo
+        }
+
+        type Foo @key(fields: "id") {
+          id: ID!
+        }
+        "#,
+    )
+    .expect("valid subgraph");
+
+    let result = compose(vec![subgraph_a, subgraph_b])
+        .expect("Expected composition to succeed with existing @authenticated directive");
+
+    assert!(
+        !result
+            .schema()
+            .schema()
+            .directive_definitions
+            .contains_key("@authenticated")
+    );
+}
+
+#[test]
+fn composes_subgraphs_with_overridden_fields_on_renamed_root_types() {
+    // Test that @override directives work correctly when root operation types are renamed
+    // during normalization (e.g., MyMutation -> Mutation).
+    // This is a regression test for a bug where directive referencers were not updated
+    // after type renaming, causing @override directives to not be recognized.
+
+    let subgraph_a = ServiceDefinition {
+        name: "subgraph-a",
+        type_defs: r#"
+            schema {
+                query: Query
+                mutation: MyMutation
+            }
+
+            type Query {
+                user(id: ID!): User @shareable
+            }
+
+            type MyMutation {
+                createUser(name: String!): User! @override(from: "subgraph-b")
+                updateUser(id: ID!, name: String!): User! @override(from: "subgraph-b")
+            }
+
+            type User @key(fields: "id") {
+                id: ID!
+                name: String!
+            }
+        "#,
+    };
+
+    let subgraph_b = ServiceDefinition {
+        name: "subgraph-b",
+        type_defs: r#"
+            schema {
+                query: Query
+                mutation: Mutation
+            }
+
+            type Query {
+                user(id: ID!): User @shareable
+            }
+
+            type Mutation @shareable {
+                createUser(name: String!): User!
+                updateUser(id: ID!, name: String!): User!
+            }
+
+            type User @key(fields: "id") {
+                id: ID!
+                email: String
+            }
+        "#,
+    };
+
+    let result = compose_as_fed2_subgraphs(&[subgraph_a, subgraph_b]);
+
+    // Before the fix, this would fail with INVALID_FIELD_SHARING errors because
+    // the @override directives on MyMutation fields were not recognized after
+    // MyMutation was renamed to Mutation during normalization.
+    let _supergraph = result.expect("Expected composition to succeed");
+}
+
+#[test]
+fn test_satisfiability_handles_extra_implicit_downcast() {
+    // Regression test for satisfiability validation with interface/implementation type covariance.
+    // When a @shareable field returns different but compatible types across subgraphs
+    // (e.g., A in one, I interface in another), the supergraph uses the interface type.
+    // During satisfiability validation, when the supergraph tries to downcast to the
+    // implementation type, if a subgraph is already at that type, the downcast should
+    // be treated as a no-op rather than failing with "cannot find type".
+
+    let subgraph_a = r#"
+        schema @link(url: "https://specs.apollo.dev/federation/v2.3", import: ["@key", "@shareable", "@override"]) {
+            query: Query
+            mutation: MyMutation
+        }
+
+        type Query { dummy: String @shareable }
+
+        type MyMutation {
+            doSomething(input: Input!): T! @override(from: "subgraph-b")
+        }
+
+        input Input { value: String! }
+
+        type T @shareable {
+            field: A!
+        }
+
+        interface I {
+            id: ID!
+        }
+
+        type A implements I @key(fields: "id") @shareable {
+            id: ID!
+            name: String
+        }
+    "#;
+
+    let subgraph_b = r#"
+        schema @link(url: "https://specs.apollo.dev/federation/v2.3", import: ["@key", "@shareable"]) {
+            query: Query
+            mutation: Mutation
+        }
+
+        type Query { dummy: String @shareable }
+
+        type Mutation @shareable {
+            doSomething(input: Input!): T!
+        }
+
+        input Input { value: String! }
+
+        type T @shareable {
+            field: I!
+        }
+
+        interface I {
+            id: ID!
+        }
+
+        type A implements I @key(fields: "id", resolvable: false) @shareable {
+            id: ID!
+        }
+    "#;
+
+    let parsed_a = Subgraph::parse("subgraph-a", "http://subgraph-a", subgraph_a)
+        .expect("Failed to parse subgraph-a");
+    let parsed_b = Subgraph::parse("subgraph-b", "http://subgraph-b", subgraph_b)
+        .expect("Failed to parse subgraph-b");
+
+    // Before the fix, this would fail with:
+    // SATISFIABILITY_ERROR: cannot find type "A" in subgraph "subgraph-a"
+    // because the validator tried to downcast from I to A, but subgraph-a was already
+    // at A (no downcast edge needed).
+    let result = compose(vec![parsed_a, parsed_b]);
+    result.expect("Expected composition to succeed");
+}
+
+#[test]
+fn composes_input_field_with_int_to_float_coercible_defaults() {
+    // Regression test for input field default value coercibility.
+    // When an input field has type Float, default values of 200 (Int) and 200.0 (Float)
+    // should be considered compatible because Int values are coercible to Float.
+    // This should not produce an INPUT_FIELD_DEFAULT_MISMATCH error.
+
+    let subgraph_a = ServiceDefinition {
+        name: "subgraph-a",
+        type_defs: r#"
+            type Query {
+                foo(input: InputA): [A!]! @shareable
+            }
+
+            input InputA {
+                value: Float! = 200
+                unit: String! = "meters"
+            }
+
+            type A @shareable {
+                id: ID!
+                name: String!
+            }
+        "#,
+    };
+
+    let subgraph_b = ServiceDefinition {
+        name: "subgraph-b",
+        type_defs: r#"
+            type Query {
+                foo(input: InputA): [A!]! @shareable
+            }
+
+            input InputA {
+                value: Float! = 200.0
+                unit: String! = "meters"
+            }
+
+            type A @shareable {
+                id: ID!
+                name: String!
+            }
+        "#,
+    };
+
+    let result = compose_as_fed2_subgraphs(&[subgraph_a, subgraph_b]);
+
+    // This should succeed because 200 (Int) is coercible to 200.0 (Float)
+    let _supergraph = result
+        .expect("Expected composition to succeed with Int default coercible to Float default");
+}
+
+#[test]
+fn composes_subgraphs_with_directives_on_renamed_root_types() {
+    let subgraph_a = ServiceDefinition {
+        name: "subgraph-a",
+        type_defs: r#"
+            schema {
+                query: MyQuery
+                mutation: MyMutation
+            }
+
+            type MyQuery @tag(name: "custom") {
+                hello(name: String! @tag(name: "custom")): String @tag(name: "custom")
+            }
+
+            type MyMutation @tag(name: "custom") {
+                bye(name: String! @tag(name: "custom")): String! @tag(name: "custom")
+            }
+        "#,
+    };
+
+    let subgraph_b = ServiceDefinition {
+        name: "subgraph-b",
+        type_defs: r#"
+            schema {
+                query: Query
+                mutation: Mutation
+            }
+
+            type Query {
+                helloWorld: String
+            }
+
+            type Mutation {
+                goodbyeWorld: String
+            }
+        "#,
+    };
+
+    let result = compose_as_fed2_subgraphs(&[subgraph_a, subgraph_b]);
+    let _supergraph = result.expect("Expected composition to succeed");
+}
+
+#[test]
+fn misc_conflicting_subgraph_names_sanitization() {
+    let sg1 = ServiceDefinition {
+        name: "mysubgraph",
+        type_defs: r#"
+        type Query {
+          foo: String
+        }
+        "#,
+    };
+
+    let sg2 = ServiceDefinition {
+        name: "MySubgraph",
+        type_defs: r#"
+        type Query {
+          bar: String
+        }
+        "#,
+    };
+
+    let result = compose_as_fed2_subgraphs(&[sg1, sg2]);
+    let supergraph = result.expect("Expected composition to succeed");
+
+    let schema_str = supergraph.schema().schema().to_string();
+    assert!(
+        schema_str.contains("MYSUBGRAPH_1"),
+        "Expected MYSUBGRAPH_1 in schema"
+    );
+    assert!(
+        schema_str.contains("MYSUBGRAPH_2"),
+        "Expected MYSUBGRAPH_2 in schema"
+    );
+}

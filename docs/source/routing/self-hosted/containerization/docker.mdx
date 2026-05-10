@@ -1,0 +1,164 @@
+---
+title: Deploying the Apollo Runtime in Docker
+subtitle: Run an Apollo Runtime container image in Docker
+description: Easily deploy a container with everything you need to serve GraphQL requests using Apollo.
+---
+
+import ElasticNotice from '../../../../shared/elastic-notice.mdx';
+
+This guide shows you how to run the Apollo Runtime container, which includes both the Apollo Router and MCP Server in a single image.
+
+If you only need the Apollo Router without MCP Server functionality, see [Router-only Docker container](docker-router-only).
+
+This guide explains how to:
+- Run a basic Apollo Runtime container with default configuration
+- Customize configuration to override defaults
+- Manually specify a supergraph for your Router
+
+The [documentation](https://docs.docker.com/engine/reference/run/) for the `docker run` command is a helpful reference for the examples in this guide.
+
+## Prerequisites
+
+Before you start:
+
+1. [Set up a GraphQL API in GraphOS](/graphos/get-started/guides/graphql#step-1-set-up-your-graphql-api).
+    - Save your `APOLLO_KEY` and `APOLLO_GRAPH_REF`. You'll need them when deploying the Router.
+1. Install [Docker](https://www.docker.com/get-started/) locally.
+1. Choose a container version to deploy (for example, `latest` or a specific version tag). For versioning details, see the [container tags documentation](https://github.com/apollographql/apollo-runtime?tab=readme-ov-file#container-tags).
+
+<ElasticNotice />
+
+<Note>
+
+If your organization uses a corporate proxy with TLS inspection, [add your proxy's root certificate to the container](proxy-certificates).
+
+</Note>
+
+## Quick start
+
+Run the following command, replacing the `APOLLO_GRAPH_REF` and `APOLLO_KEY` values with your own.
+
+```bash title="Docker"
+docker run \
+  -p 4000:4000 \
+  --env APOLLO_GRAPH_REF="<your-graph-ref>" \
+  --env APOLLO_KEY="<your-graph-api-key>" \
+  --rm \
+  ghcr.io/apollographql/apollo-runtime:latest
+```
+
+This command runs the Apollo Runtime image with Docker, downloads your supergraph schema from Apollo and uses a default configuration that listens on port `4000`.
+
+## Enabling MCP
+
+Enable the [Apollo MCP Server](/apollo-mcp-server) using the `MCP_ENABLE` environment variable. Export container port `8000` for Streamable HTTP connections to the MCP server with the `-p 8000:8000` flag.
+
+```bash title="Docker" {3, 6}
+docker run \
+  -p 4000:4000 \
+  -p 8000:8000 \
+  --env APOLLO_GRAPH_REF="<your-graph-ref>" \
+  --env APOLLO_KEY="<your-graph-api-key>" \
+  --env MCP_ENABLE=1 \
+  --rm \
+  ghcr.io/apollographql/apollo-runtime:latest
+```
+
+## Configuring using local files
+
+Provide your own configuration by mounting the directory containing your configuration files to `/config`:
+
+```bash title="Docker"
+docker run -p 4000:4000 \
+  --env APOLLO_GRAPH_REF="<your-graph-ref>" \
+  --env APOLLO_KEY="<your-graph-api-key>" \
+  -v <<ABSOLUTE_PATH_TO_THE_MY_CONFIG_DIRECTORY>>:/config
+  --rm \
+  ghcr.io/apollographql/apollo-runtime:<runtime-image-version>
+```
+
+Mount specific files, such as your schema file:
+
+```bash title="Docker"
+...
+-v <<ABSOLUTE_PATH_TO_SCHEMA_FILE>:/config/schema.graphql 
+...
+```
+
+When overriding the default Router configuration, preserve the `0.0.0.0` bind address (for all interfaces). This ensures the Router is accessible outside the container. Without this, the Router only listens on `localhost`.
+
+Use this method for local supergraph schemas, persisted query manifests, Router configuration, and more. Learn more in the [configuration documentation](https://github.com/apollographql/apollo-runtime?tab=readme-ov-file#configuring-using-local-files).
+
+<Note>
+
+Both local and container paths must be specified as absolute paths.
+
+</Note>
+
+## Specifying the supergraph
+
+To avoid automatically updating your supergraph via [Apollo Uplink](/federation/managed-federation/uplink/), or if you can't access Apollo Uplink from your environment, use one of these options:
+
+1. Use a local supergraph file, as documented in [Configuring using local files](#configuring-using-local-files).
+1. Use a [graph artifact reference](#using-a-graph-artifact-reference).
+
+### Using a graph artifact reference
+
+⚠️ This option is in preview and doesn't support hot-reloading of schemas.
+
+Set the `APOLLO_GRAPH_ARTIFACT_REFERENCE` environment variable to use the supergraph schema from a graph artifact:
+
+```bash
+docker run -p 4000:4000 \
+  --env APOLLO_KEY="<your-graph-api-key>" \
+  --env APOLLO_GRAPH_ARTIFACT_REFERENCE="<your-graph-artifact-reference>" \
+  --rm \
+  ghcr.io/apollographql/apollo-runtime:<runtime-image-version>
+```
+
+The Router uses the schema from the specified graph artifact instead of Apollo Uplink. The Router still fetches entitlements and persisted queries from Uplink. Learn more in the [Router CLI Configuration Reference](/graphos/routing/configuration/cli#--graph-artifact-reference).
+
+## Running a specific Router and MCP version
+
+The Apollo Runtime uses a three-part tagging scheme separated by underscores: container version, Apollo Router version, and MCP Server version. This allows you to pin specific versions of the runtime components.
+
+### Tag format examples
+
+**Latest of everything:**
+
+```bash
+ghcr.io/apollographql/apollo-runtime:latest
+```
+
+This retrieves the newest versions of all components.
+
+**Pinned container and router:**
+
+```bash
+ghcr.io/apollographql/apollo-runtime:v0.1.0_router2.1.2
+```
+
+This locks the runtime container and router versions while always fetching the latest MCP server.
+
+**Pinned router and MCP server:**
+
+```bash
+ghcr.io/apollographql/apollo-runtime:latest_router2.1.2_mcp-server0.2.1
+```
+
+This fixes specific router and MCP server versions but keeps the container version current.
+
+<Note>
+
+Not all tag combinations are supported. Verify your desired tag exists before attempting to use it.
+
+</Note>
+
+### Alternative registry
+
+If `ghcr.io` is inaccessible to you, all images are also available on DockerHub as of `0.0.13_router2.5.0_mcp-server0.7.0` onwards:
+
+```bash
+docker pull apollograph/apollo-runtime
+```
+

@@ -1,0 +1,17 @@
+---
+title: Safelisting with Persisted Queries
+subtitle: Secure your graph while minimizing request latency
+description: Secure your federated GraphQL API by creating an allowlist of trusted operations. Minimize request latency and enhance performance.
+minVersion: Router v1.25.0
+---
+
+<PlanRequired plans={["Free", "Developer", "Standard", "Enterprise"]}>
+
+Rate limits apply on the Free plan.
+Developer and Standard plans require Router v2.6.0 or later.
+
+</PlanRequired>
+
+Persisted queries enable you to maintain an allowlist of trusted operations and optionally require clients to send operation IDs instead of full operation strings. The GraphOS Router enforces safelisting and fetches the persisted query list (PQL) from GraphOS.
+
+For the complete implementation guide, including PQL creation, operation registration, client updates, and incremental adoption, see [Safelisting with Persisted Queries](/graphos/platform/security/persisted-queries).
