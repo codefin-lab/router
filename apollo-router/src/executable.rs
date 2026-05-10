@@ -313,6 +313,12 @@ pub fn main() -> Result<()> {
 
     let mut builder = tokio::runtime::Builder::new_multi_thread();
     builder.enable_all();
+    builder.thread_stack_size(
+        std::env::var("APOLLO_ROUTER_THREAD_STACK_SIZE")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(64 * 1024 * 1024),
+    );
 
     // This environment variable is intentionally undocumented.
     // See also APOLLO_ROUTER_COMPUTE_THREADS in apollo-router/src/compute_job.rs
