@@ -90,7 +90,8 @@ jobs:
         run: |
           cargo test --locked -p apollo-router --test integration_tests integration::file_upload::it_ -- --list > /tmp/upload-tests.txt
           test "$(grep -c ': test$' /tmp/upload-tests.txt)" -ge 18
-          cargo test --locked -p apollo-router --test integration_tests integration::file_upload::it_
+          cargo test --locked -p apollo-router --test integration_tests integration::file_upload::it_ -- --nocapture 2>&1 | tee /tmp/upload-results.txt
+          test "$(grep -c 'VA017_UPLOAD_VALIDATED' /tmp/upload-results.txt)" -ge 18
 
       - name: Security backport HTTP integration tests
         if: ${{ !cancelled() }}

@@ -1746,8 +1746,6 @@ mod helper {
     use tokio_stream::Stream;
 
     use crate::integration::IntegrationTest;
-    use crate::integration::common::graph_os_enabled;
-
     /// A helper server for testing multipart uploads.
     ///
     /// Note: This is a shim until wiremock supports two needed features:
@@ -1795,12 +1793,9 @@ mod helper {
             self,
             validation_fn: impl Fn(apollo_router::graphql::Response),
         ) -> Result<(), BoxError> {
-            // Ensure that we have the test keys before running
-            // Note: The [IntegrationTest] ensures that these test credentials get
-            // set before running the router.
-            if !graph_os_enabled() {
-                return Ok(());
-            };
+            // IntegrationTest defaults to local Uplink/JWKS/telemetry mocks.
+            // These synthetic uploads must run without real Studio credentials;
+            // returning early here makes Cargo report a pass without validation.
 
             // Bind to the first available port
             let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 0);
@@ -1847,6 +1842,7 @@ mod helper {
                 .await;
             let response = serde_json::from_slice(&response.bytes().await?)?;
             validation_fn(response);
+            eprintln!("VA017_UPLOAD_VALIDATED");
 
             // Kill the server and finish up
             shutdown_tx.send(()).unwrap();
