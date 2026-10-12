@@ -6,7 +6,7 @@ FROM rust:1.97.1-slim-bookworm as build
 WORKDIR /usr/src/router
 
 # Update our build image and install required packages
-RUN apt-get update && apt-get -y install \
+RUN apt-get update && apt-get -y install --no-install-recommends \
     build-essential \
     protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
@@ -41,8 +41,10 @@ WORKDIR /dist
 # Update apt and install ca-certificates
 RUN \
   apt-get update -y \
-  && apt-get install -y \
-    ca-certificates
+  && apt-get install -y --no-install-recommends \
+    ca-certificates \
+  && apt-get install -y --no-install-recommends --only-upgrade perl-base \
+  && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' perl-base)" ge '5.36.0-7+deb12u4'
 
 # Copy in the required files from our build image
 COPY --from=build --chown=root:root /dist /dist
@@ -50,7 +52,7 @@ COPY --from=build --chown=root:root /dist /dist
 # If debug image, install a bunch of useful debugging stuff and make a data directory
 RUN \
   if [ "${DEBUG_IMAGE}" = "true" ]; then \
-    apt-get install -y \
+    apt-get install -y --no-install-recommends \
     dnsutils \
     procps \
     heaptrack \

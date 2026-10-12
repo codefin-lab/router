@@ -93,3 +93,52 @@ the other manifest is an attestation. No amd64 baseline is claimed.
 Candidate image scanning retains archives for 14 days and reports for 90 days.
 All Trivy invocations share one explicit cache directory; baseline scanning
 uses `--skip-db-update` to compare against the candidate's vulnerability DB.
+
+## Initial Linux/image checkpoint (2026-10-12)
+
+Head `4a43ecac586d8b6fb2633b5539ac89398c64287d` passed Linux build and
+347 selected tests in [CI 38247866991](https://github.com/codefin-lab/router/actions/runs/38247866991).
+The PR merge test commit is `c6eb6a2140932c660c5afbb5eadba93ab0805899`;
+image artifacts record that exact source commit, image ID and archive checksum.
+[Image scan 38247867063](https://github.com/codefin-lab/router/actions/runs/38247867063)
+built and smoke-tested 2.18.0 on both native architectures:
+
+| Image | Critical | High | Medium | Low | Unknown |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Original arm64 | 6 | 66 | 145 | 109 | 8 |
+| Initial candidate arm64 | 4 | 56 | 110 | 81 | 4 |
+| Initial candidate amd64 (no old baseline) | 4 | 56 | 110 | 81 | 4 |
+
+These are raw finding occurrences. Trivy detected only Debian targets in these
+image reports, so this does not prove Rust libraries free from vulnerabilities.
+The separate source scan reports C0/H4/M3/L3 dependencies and C0/H9/M4/L13
+configuration findings. Rust dependency triage remains a release gate.
+
+### Critical triage and immediate patch
+
+Three Critical findings on installed `perl-base 5.36.0-7+deb12u3` have the
+Bookworm security fix `5.36.0-7+deb12u4`:
+- [CVE-2026-13221](https://security-tracker.debian.org/tracker/CVE-2026-13221)
+- [CVE-2026-42496](https://security-tracker.debian.org/tracker/CVE-2026-42496)
+- [CVE-2026-8376](https://security-tracker.debian.org/tracker/CVE-2026-8376)
+
+The final image now explicitly upgrades perl-base through Debian's configured
+repositories and fails the build below that security version. This permits a
+newer security revision instead of requiring a retired exact package version.
+A fresh build, version smoke test and scan must prove the reduction; these
+initial counts are not the patched result. No Debian release mixing is used.
+
+The fourth finding, [CVE-2023-45853](https://security-tracker.debian.org/tracker/CVE-2023-45853),
+is reported on `zlib1g`. Debian marks Bookworm source zlib ignored because
+contrib/minizip is not built in the affected binary packages. This supports
+package-scoped not-affected review, not a global ignore for this CVE. Retain raw
+findings and package inventory; separately consider bundled MiniZip copies.
+No scanner suppression or accepted exception has been added.
+
+### Remaining compiler warning
+
+`proc-macro-error2 2.0.1` warns about private proc_macro re-export on Rust 1.97.1.
+[RUSTSEC-2026-0173](https://rustsec.org/advisories/RUSTSEC-2026-0173) identifies
+this crate as unmaintained with no patched release. Replacing its parent macro
+dependency needs compatibility review; do not hide the warning or vendor an
+unreviewed source patch merely to make logs green. It remains visible.
