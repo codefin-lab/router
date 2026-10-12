@@ -87,7 +87,7 @@ pub(crate) fn create_propagator(
         propagators.push(Box::<opentelemetry_jaeger_propagator::Propagator>::default());
     }
     if tracing.is_baggage_propagation_enabled() {
-        propagators.push(Box::<opentelemetry_sdk::propagation::BaggagePropagator>::default());
+        propagators.push(Box::<BoundedBaggagePropagator>::default());
     }
     if tracing.is_trace_context_propagation_enabled() {
         propagators.push(Box::<opentelemetry_sdk::propagation::TraceContextPropagator>::default());
@@ -140,4 +140,105 @@ pub(crate) trait TracingConfigurator {
     fn config(conf: &Conf) -> &Self;
     fn is_enabled(&self) -> bool;
     fn configure(&self, builder: &mut TracingBuilder) -> Result<(), BoxError>;
+}
+
+// CVE-2026-48504: bound untrusted input before SDK 0.31 parses or allocates it.
+// Keep this guard until the coupled SDK/exporter stack adopts the upstream fix.
+#[derive(Debug, Default)]
+struct BoundedBaggagePropagator(opentelemetry_sdk::propagation::BaggagePropagator);
+
+impl TextMapPropagator for BoundedBaggagePropagator {
+    fn inject_context(
+        &self,
+        cx: &opentelemetry::Context,
+        injector: &mut dyn opentelemetry::propagation::Injector,
+    ) {
+        self.0.inject_context(cx, injector);
+    }
+
+    fn extract_with_context(
+        &self,
+        cx: &opentelemetry::Context,
+        extractor: &dyn opentelemetry::propagation::Extractor,
+    ) -> opentelemetry::Context {
+        if let Some(value) = extractor.get("baggage") {
+            if value.len() > 8192 || value.split(',').take(65).count() > 64 {
+                return cx.clone();
+            }
+        }
+        self.0.extract_with_context(cx, extractor)
+    }
+
+    fn fields(&self) -> opentelemetry::propagation::text_map_propagator::FieldIter<'_> {
+        self.0.fields()
+    }
+}
+
+#[cfg(test)]
+mod bounded_baggage_tests {
+    use super::*;
+    use opentelemetry::baggage::BaggageExt;
+    use std::collections::HashMap;
+
+    #[test]
+    fn accepts_normal_baggage_and_preserves_injection() {
+        let p = BoundedBaggagePropagator::default();
+        let headers = HashMap::from([("baggage".to_string(), "team=wealth".to_string())]);
+        let cx = p.extract(&headers);
+        assert_eq!(cx.baggage().get("team").unwrap().as_str(), "wealth");
+        let mut output = HashMap::new();
+        p.inject_context(&cx, &mut output);
+        assert_eq!(output.get("baggage").unwrap(), "team=wealth");
+    }
+
+    #[test]
+    fn rejects_oversized_bytes_and_preserves_existing_context() {
+        let p = BoundedBaggagePropagator::default();
+        let cx = opentelemetry::Context::new()
+            .with_baggage([opentelemetry::KeyValue::new("existing", "value")]);
+        for value in [
+            format!("x={}", "a".repeat(8191)),
+            format!("x={}", "é".repeat(4096)),
+        ] {
+            let headers = HashMap::from([("baggage".to_string(), value)]);
+            let result = p.extract_with_context(&cx, &headers);
+            assert!(result.baggage().get("x").is_none());
+            assert!(result.baggage().get("existing").is_some());
+        }
+    }
+
+    #[test]
+    fn accepts_64_members_and_rejects_65() {
+        let p = BoundedBaggagePropagator::default();
+        for count in [64, 65] {
+            let value = (0..count)
+                .map(|i| format!("k{i}=v"))
+                .collect::<Vec<_>>()
+                .join(",");
+            let headers = HashMap::from([("baggage".to_string(), value)]);
+            assert_eq!(
+                p.extract(&headers).baggage().len(),
+                if count == 64 { 64 } else { 0 }
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_baggage_does_not_discard_trace_context() {
+        use opentelemetry::trace::TraceContextExt;
+        let p = TextMapCompositePropagator::new(vec![
+            Box::<BoundedBaggagePropagator>::default(),
+            Box::<opentelemetry_sdk::propagation::TraceContextPropagator>::default(),
+        ]);
+        let headers = HashMap::from([
+            ("baggage".to_string(), "x".repeat(8193)),
+            (
+                "traceparent".to_string(),
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string(),
+            ),
+        ]);
+        let cx = p.extract(&headers);
+        assert!(cx.span().span_context().is_valid());
+        assert_eq!(cx.baggage().len(), 0);
+    }
 }

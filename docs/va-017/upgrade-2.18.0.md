@@ -173,3 +173,19 @@ in reload/tracing.rs when enabled. This remains unresolved pending coordinated
 migration or a reviewed backport; do not claim non-applicability without consumer
 configuration evidence. Legacy rand 0.7 also remains pending parent dependency
 migration; no compatible 0.7 security patch is reported. No exception is approved.
+
+## Baggage mitigation (requires current-head validation)
+
+The configured baggage propagator now bounds input before calling SDK 0.31:
+headers over 8192 bytes or 64 comma-separated members leave existing context
+unchanged. Normal injection/extraction and the independent trace-context
+propagator are preserved. This implements the upstream carrier-boundary
+workaround for [GHSA-w9wp-h8wv-79jx](https://github.com/open-telemetry/opentelemetry-rust/security/advisories/GHSA-w9wp-h8wv-79jx)
+without mixing incompatible exporter SDK types. Oversized baggage is discarded,
+not the request itself. Unit tests cover normal round-trip, oversized UTF-8 and
+ASCII, 64/65 members, context preservation and independent trace context.
+
+The vulnerable SDK version remains in the SBOM: retain its Medium finding and
+classify this as application mitigation, not a patched package or an approved
+exception. Remove the wrapper only after coordinated migration to a fixed SDK
+and verification of equivalent limits. No header values are logged.
