@@ -623,6 +623,72 @@ mod tests {
 
     use super::*;
     use crate::assert_snapshot_subscriber;
+    #[tokio::test]
+    async fn va017_middleware_preserves_request_and_downstream_error_response() {
+        // The patched middleware must not swallow payloads or turn downstream auth errors into 200s.
+        for status in [
+            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
+            StatusCode::BAD_GATEWAY,
+        ] {
+            let app = Router::new()
+                .route(
+                    "/query",
+                    axum::routing::post(move |request: Request<axum::body::Body>| async move {
+                        assert_eq!(
+                            request.uri().path_and_query().unwrap().as_str(),
+                            "/query?operationName=Read"
+                        );
+                        assert_eq!(
+                            request.headers()["authorization"],
+                            "Bearer synthetic-test-token"
+                        );
+                        assert_eq!(request.headers()["x-request-id"], "va017-test");
+                        let body = axum::body::to_bytes(request.into_body(), 1024)
+                            .await
+                            .unwrap();
+                        assert_eq!(body.as_ref(), br#"{"query":"{__typename}"}"#);
+                        Response::builder()
+                            .status(status)
+                            .header("x-request-id", "va017-test")
+                            .header(CONTENT_TYPE, "application/json")
+                            .body(axum::body::Body::from(
+                                r#"{"errors":[{"message":"denied"}]}"#,
+                            ))
+                            .unwrap()
+                    }),
+                )
+                .layer(middleware::from_fn_with_state(
+                    (
+                        Arc::new(LicenseState::Licensed { limits: None }),
+                        Instant::now(),
+                        Arc::new(AtomicU64::new(0)),
+                    ),
+                    license_handler,
+                ));
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/query?operationName=Read")
+                        .header("authorization", "Bearer synthetic-test-token")
+                        .header("x-request-id", "va017-test")
+                        .header(CONTENT_TYPE, "application/json")
+                        .body(axum::body::Body::from(r#"{"query":"{__typename}"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status);
+            assert_eq!(response.headers()["x-request-id"], "va017-test");
+            assert_eq!(response.headers()[CONTENT_TYPE], "application/json");
+            let body = axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap();
+            assert_eq!(body.as_ref(), br#"{"errors":[{"message":"denied"}]}"#);
+        }
+    }
+
     #[test]
     fn test_span_mode_default() {
         let config =

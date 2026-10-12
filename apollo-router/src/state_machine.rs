@@ -342,9 +342,7 @@ impl<FA: RouterSuperServiceFactory> State<FA> {
 
         // All license enforcement removed — treat as fully licensed
         let _license_limits = &Option::<LicenseLimits>::None;
-        let effective_license = Arc::new(LicenseState::Licensed {
-            limits: None,
-        });
+        let effective_license = Arc::new(LicenseState::Licensed { limits: None });
 
         if let Err(feature_gate_violations) =
             FeatureGateEnforcementReport::build(&configuration, &schema).check()
@@ -1198,6 +1196,95 @@ mod tests {
             execute(server_factory, router_factory, stream::iter(vec![Shutdown])).await,
             Ok(())
         );
+    }
+
+    // These exercise the real parsing/gating path before the mocked server boundary.
+    #[test(tokio::test)]
+    async fn va017_invalid_schema_never_starts_a_server() {
+        let router_factory = create_mock_router_configurator(0);
+        let (server_factory, shutdown_receivers) = create_mock_server_factory(0);
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            execute(
+                server_factory,
+                router_factory,
+                stream::iter(vec![
+                    UpdateConfiguration(Arc::new(Configuration::builder().build().unwrap())),
+                    UpdateSchema(SchemaState {
+                        sdl: "not a GraphQL schema".to_owned(),
+                        launch_id: None,
+                    }),
+                    UpdateLicense(Default::default()),
+                ]),
+            ),
+        )
+        .await
+        .expect("state transition must complete within ten seconds");
+        assert_matches!(result, Err(ApolloRouterError::ServiceCreationError(_)));
+        assert!(shutdown_receivers.0.lock().is_empty());
+    }
+
+    #[test(tokio::test)]
+    async fn va017_invalid_schema_reload_preserves_running_server_and_can_recover() {
+        let router_factory = create_mock_router_configurator(2);
+        let (server_factory, shutdown_receivers) = create_mock_server_factory(2);
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            execute(
+                server_factory,
+                router_factory,
+                stream::iter(vec![
+                    UpdateConfiguration(Arc::new(Configuration::builder().build().unwrap())),
+                    UpdateSchema(example_schema()),
+                    UpdateLicense(Default::default()),
+                    UpdateSchema(SchemaState {
+                        sdl: "not a GraphQL schema".to_owned(),
+                        launch_id: None,
+                    }),
+                    UpdateSchema(SchemaState {
+                        sdl: include_str!("testdata/minimal_supergraph.graphql").to_owned(),
+                        launch_id: None,
+                    }),
+                    Shutdown,
+                ]),
+            ),
+        )
+        .await
+        .expect("state transition must complete within ten seconds");
+        assert_matches!(result, Ok(()));
+        // Initial startup and later valid reload only; invalid input never replaces the server.
+        assert_eq!(shutdown_receivers.0.lock().len(), 2);
+    }
+
+    #[test(tokio::test)]
+    async fn va017_preview_feature_gate_is_still_enforced_before_startup() {
+        let router_factory = create_mock_router_configurator(0);
+        let (server_factory, shutdown_receivers) = create_mock_server_factory(0);
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            execute(
+                server_factory,
+                router_factory,
+                stream::iter(vec![
+                    UpdateConfiguration(Arc::new(
+                        Configuration::from_str(include_str!("uplink/testdata/oss.router.yaml"))
+                            .unwrap(),
+                    )),
+                    UpdateSchema(SchemaState {
+                        sdl: include_str!(
+                            "uplink/testdata/feature_enforcement_connect_v0_4.graphql"
+                        )
+                        .to_owned(),
+                        launch_id: None,
+                    }),
+                    UpdateLicense(Default::default()),
+                ]),
+            ),
+        )
+        .await
+        .expect("state transition must complete within ten seconds");
+        assert_matches!(result, Err(ApolloRouterError::FeatureGateViolation));
+        assert!(shutdown_receivers.0.lock().is_empty());
     }
 
     #[test(tokio::test)]
