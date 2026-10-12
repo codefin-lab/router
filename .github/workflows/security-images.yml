@@ -5,6 +5,8 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+env:
+  TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
 jobs:
   scan:
     strategy:

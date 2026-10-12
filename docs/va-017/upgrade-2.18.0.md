@@ -76,3 +76,20 @@ Remaining release gates:
 This candidate must not be merged or tagged as a release until the relevant
 checkpoint review is complete. Existing tag-triggered release is not invoked
 by this PR.
+
+## Local validation update
+
+On macOS ARM64 with Rust 1.97.1, all 347 selected tests passed: license 36,
+lifecycle 66, HTTP 6, preview gate 5, authentication 106, authorization 89,
+subscription 12 and uploads 27. The four VA-017 regressions are included in
+these counts. The permanent-rejection retry test uses the active preview gate
+rather than the removed fork license restriction trigger; it passed.
+
+The original Docker Hub index resolves to
+`sha256:25e8351b8697ebdf674701b442a1a484f6e39d4f6ec0f13885ed84e9c6e08dd6`.
+Its sole runnable image is arm64 manifest
+`sha256:9a79fca41eae439c82e8feaa9a91639a9f8001a647e8516bb42409505eff4d71`;
+the other manifest is an attestation. No amd64 baseline is claimed.
+Candidate image scanning retains archives for 14 days and reports for 90 days.
+All Trivy invocations share one explicit cache directory; baseline scanning
+uses `--skip-db-update` to compare against the candidate's vulnerability DB.
