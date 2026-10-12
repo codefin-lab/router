@@ -80,10 +80,17 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           cargo test --locked -p apollo-router --lib -- --list > /tmp/router-tests.txt
-          for suite in feature_gate_enforcement plugins::authentication plugins::authorization plugins::subscription file_uploads services::hickory_dns_connector services::http::service plugins::telemetry::reload plugins::rhai services::supergraph; do
+          for suite in feature_gate_enforcement plugins::authentication plugins::authorization plugins::subscription file_uploads services::hickory_dns_connector services::http::service plugins::telemetry::reload plugins::rhai services::supergraph protocols::websocket services::subgraph_service; do
             grep -F "$suite" /tmp/router-tests.txt | grep -q ': test$'
             cargo test --locked -p apollo-router --lib "$suite"
           done
+
+      - name: Upload HTTP integration tests
+        if: ${{ !cancelled() }}
+        run: |
+          cargo test --locked -p apollo-router --test integration_tests integration::file_upload::it_ -- --list > /tmp/upload-tests.txt
+          test "$(grep -c ': test$' /tmp/upload-tests.txt)" -ge 18
+          cargo test --locked -p apollo-router --test integration_tests integration::file_upload::it_
 
       - name: Security backport HTTP integration tests
         if: ${{ !cancelled() }}

@@ -69,8 +69,12 @@ RUN \
 RUN rm -rf /var/lib/apt/lists/*
 
 # Set labels for our image
+ARG VCS_REF=unknown
+ARG IMAGE_VERSION=development
 LABEL org.opencontainers.image.authors="Apollo Graph, Inc. https://github.com/apollographql/router"
-LABEL org.opencontainers.image.source="https://github.com/apollographql/router"
+LABEL org.opencontainers.image.source="https://github.com/codefin-lab/router"
+LABEL org.opencontainers.image.revision="${VCS_REF}"
+LABEL org.opencontainers.image.version="${IMAGE_VERSION}"
 
 ENV APOLLO_ROUTER_CONFIG_PATH="/dist/config/router.yaml"
 

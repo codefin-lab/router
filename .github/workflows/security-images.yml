@@ -31,12 +31,16 @@ jobs:
           load: true
           push: false
           tags: router-candidate:scan
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            IMAGE_VERSION=v2.18.0-open-r1-candidate
           cache-from: type=gha,scope=router-${{ matrix.arch }}
           cache-to: type=gha,scope=router-${{ matrix.arch }},mode=max
       - name: Record image identity and smoke test
         run: |
           mkdir -p security-reports
           docker image inspect router-candidate:scan > security-reports/image-inspect.json
+          python3 scripts/va017_runtime_evidence.py security-reports/image-inspect.json "$GITHUB_SHA" v2.18.0-open-r1-candidate
           docker run --rm router-candidate:scan --version | tee security-reports/version.txt
           grep -F '2.18.0' security-reports/version.txt
           docker save router-candidate:scan -o /tmp/router-candidate.tar

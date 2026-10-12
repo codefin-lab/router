@@ -49,20 +49,7 @@ jobs:
           trivy fs --format cyclonedx --scanners vuln --skip-db-update --skip-dirs target,.git,security-reports --output security-reports/source.cdx.json .
           git rev-parse HEAD > security-reports/source-commit.txt
       - name: Summarize raw findings
-        run: |
-          python3 - <<'PY'
-          import collections, json, os
-          from pathlib import Path
-          lines = ['## Source security report', '', 'Report only: this does not approve an image release or close VA-017.', '', '| Report | Critical | High | Medium | Low | Unknown |', '| --- | ---: | ---: | ---: | ---: | ---: |']
-          for filename, field in [('dependencies.json', 'Vulnerabilities'), ('configuration.json', 'Misconfigurations')]:
-              report = json.loads((Path('security-reports') / filename).read_text())
-              counts = collections.Counter(item.get('Severity', 'UNKNOWN') for result in report.get('Results', []) for item in (result.get(field) or []))
-              lines.append('| ' + filename + ' | ' + ' | '.join(str(counts[s]) for s in ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN']) + ' |')
-          summary = '\n'.join(lines) + '\n'
-          Path('security-reports/summary.md').write_text(summary)
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
-              output.write(summary)
-          PY
+        run: python3 scripts/va017_source_summary.py security-reports
       - name: Upload security evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

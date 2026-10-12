@@ -1,4 +1,4 @@
-schema @link(url: "https://specs.apollo.dev/link/v1.0") @link(url: "https://specs.apollo.dev/join/v0.3", for: EXECUTION) { query: Query }
+schema @link(url: "https://specs.apollo.dev/link/v1.0") @link(url: "https://specs.apollo.dev/join/v0.3", for: EXECUTION) { query: Query mutation: Mutation subscription: Subscription }
 directive @link(url: String, as: String, for: link__Purpose, import: [link__Import]) repeatable on SCHEMA
 directive @join__graph(name: String!, url: String!) on ENUM_VALUE
 directive @join__implements(graph: join__Graph!, interface: String!) repeatable on OBJECT | INTERFACE
@@ -16,4 +16,20 @@ enum join__Graph {
 type Query @join__type(graph: LEFT) @join__type(graph: RIGHT) {
   left: String @join__field(graph: LEFT)
   right: String @join__field(graph: RIGHT)
+  account: Account @join__field(graph: LEFT)
+}
+type Account @join__type(graph: LEFT, key: "id") @join__type(graph: RIGHT, key: "id") {
+  id: ID!
+  label: String @join__field(graph: RIGHT)
+}
+scalar Upload @join__type(graph: LEFT)
+type Mutation @join__type(graph: LEFT) {
+  upload(files: [Upload!]!): String @join__field(graph: LEFT)
+}
+type Subscription @join__type(graph: RIGHT) {
+  notificationReceived: Notification @join__field(graph: RIGHT)
+}
+type Notification @join__type(graph: RIGHT) {
+  id: ID!
+  message: String!
 }
