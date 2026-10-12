@@ -135,10 +135,12 @@ package-scoped not-affected review, not a global ignore for this CVE. Retain raw
 findings and package inventory; separately consider bundled MiniZip copies.
 No scanner suppression or accepted exception has been added.
 
-### Remaining compiler warning
+### Compiler warning remediation
 
 `proc-macro-error2 2.0.1` warns about private proc_macro re-export on Rust 1.97.1.
 [RUSTSEC-2026-0173](https://rustsec.org/advisories/RUSTSEC-2026-0173) identifies
-this crate as unmaintained with no patched release. Replacing its parent macro
-dependency needs compatibility review; do not hide the warning or vendor an
-unreviewed source patch merely to make logs green. It remains visible.
+this crate as unmaintained with no patched release. The dependency path is oci-client -> oci-spec -> getset. The published
+[getset 0.1.7](https://github.com/jbaublitz/getset/releases/tag/v0.1.7) removes
+proc-macro-error2; a targeted lockfile update removes both proc-macro-error2
+and proc-macro-error-attr2 without changing other dependencies. CI must confirm
+compatibility and the absence of the warning. No lint suppression is used.
