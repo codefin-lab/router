@@ -1,0 +1,144 @@
+# Apollo Router configuration
+supergraph:
+  listen: 0.0.0.0:4000
+  introspection: true
+  path: /query
+
+# Enable subscriptions (passthrough to subgraphs via WebSocket)
+subscription:
+  enabled: true
+  mode:
+    passthrough:
+      all:
+        path: /query
+        protocol: graphql_ws
+
+# Request body size limit
+limits:
+  router:
+    http_max_request_bytes: 15728640  # 15MB
+
+# Lead CSV uploads must finish within one request (client upload + S3 + staging +
+# per-row staging updates for large files). Default is 30s; allow up to 10 minutes.
+traffic_shaping:
+  router:
+    timeout: 600s
+  all:
+    timeout: 600s
+
+# Enable multipart file upload passthrough to subgraphs
+preview_file_uploads:
+  enabled: true
+  protocols:
+    multipart:
+      enabled: true
+      mode: stream
+      limits:
+        # Use MiB (1024-based) to match FE/CRM MAX_UPLOAD_SIZE (10 * 1024 * 1024).
+        # "10MB" is decimal (10_000_000 bytes) and rejects files Windows shows as <10 MB.
+        max_file_size: "10MiB"
+        max_files: 5
+
+# Enable detailed error logging
+include_subgraph_errors:
+  all: true
+
+# Forward headers to subgraphs
+headers:
+  all:
+    request:
+      # Forward Authorization header to all subgraphs
+      - propagate:
+          named: authorization
+      # Forward other common headers
+      - propagate:
+          named: x-request-id
+      - propagate:
+          named: x-correlation-id
+      # Client IP chain for subgraph audit logs (CCD-394/351): without this the
+      # subgraphs only see the Envoy sidecar peer (127.0.0.6) and gin's
+      # trusted-proxies walk has no header to resolve the real client from.
+      - propagate:
+          named: x-forwarded-for
+      - propagate:
+          named: x-real-ip
+
+cors:
+  allow_any_origin: true
+  # Without this the browser can read the status code but not the trace id,
+  # so a user-reported error cannot be looked up in Grafana.
+  expose_headers:
+    - x-trace-id
+
+homepage:
+  enabled: false
+
+sandbox:
+  enabled: true
+
+health_check:
+  listen: 0.0.0.0:4000
+  enabled: true
+  path: /health
+
+telemetry:
+  exporters:
+    metrics:
+      prometheus:
+        enabled: true
+        listen: 0.0.0.0:9090
+        path: /metrics
+
+    # Distributed tracing. The router is the only place a trace id is minted:
+    # every request from the web app enters here, so it is the natural root.
+    # Subgraphs continue the trace from the W3C `traceparent` header the router
+    # sends them; they must never start a new one.
+    tracing:
+      propagation:
+        # W3C trace context. Keep this the ONLY format enabled — mixing in b3
+        # or jaeger makes subgraphs and the mesh disagree on the trace id.
+        trace_context: true
+
+      common:
+        service_name: cwms-router
+        # Subgraphs run parent_based sampling, so this one decision applies to
+        # the whole trace and traces never come back with holes in them.
+        parent_based_sampler: true
+        # always_on outside production; a ratio (e.g. "0.1") where volume costs.
+        sampler: ${env.ROUTER_TRACING_SAMPLER:-always_on}
+
+      # Echo the trace id to the client so a screenshot of a failed request is
+      # enough to find the trace.
+      experimental_response_trace_id:
+        enabled: true
+        header_name: x-trace-id
+
+      otlp:
+        # Per-environment, set from router.tracing.* in the Helm values. Defaults
+        # keep tracing off: with no collector reachable the router retries
+        # exports and floods its logs, so an environment must opt in.
+        # An unparseable value here makes the router refuse to start, so these
+        # env vars must be "true"/"false" and a valid endpoint.
+        enabled: ${env.ROUTER_TRACING_ENABLED:-false}
+        endpoint: ${env.ROUTER_OTLP_ENDPOINT:-http://otel-collector.observability:4317}
+        protocol: grpc
+
+  instrumentation:
+    events:
+      router:
+        error: error
+      supergraph:
+        # One line per GraphQL operation, so `kubectl logs` can be matched
+        # against a subgraph's logs by trace id. Every request hits POST /query,
+        # so without the operation name the log lines are indistinguishable.
+        #
+        # Do NOT switch this to the built-in `request`/`response` events: those
+        # dump full request headers (including the caller's JWT) and response
+        # bodies (including customer data) into the log.
+        cwms.operation:
+          message: "graphql operation"
+          on: response
+          level: info
+          attributes:
+            graphql.operation.name: true
+            graphql.operation.type: true

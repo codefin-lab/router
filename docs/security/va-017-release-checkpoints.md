@@ -50,3 +50,15 @@ The five Apollo Router advisories published 2026-07-21 identify patched Router v
 | [GHSA-gr6h-4wpf-xp52](https://github.com/apollographql/router/security/advisories/GHSA-gr6h-4wpf-xp52) | High | 2.16.1+ | Included by version range |
 
 No newer public advisory was returned by the upstream repository advisory list on 2026-10-12. The two post-2.18.0 upstream fixes backported above are security-relevant information-disclosure changes without a matching new GHSA/CVE in that list. They may not change dependency-scanner severity counts; record them as source behavior remediations and avoid claiming a numerical severity reduction from them.
+
+## Release recovery and candidate functional checks (2026-10-13)
+
+- Serialize all releases in this repository. Before publication require all version/platform tags to return GHCR `MANIFEST_UNKNOWN`; authorization, rate-limit, network and other registry failures stop publication. Check the final version again before assembly.
+- Never rerun publication jobs: matrix builds and final assembly reject `GITHUB_RUN_ATTEMPT > 1`. Preserve partial platform tags and evidence, fix the cause, and obtain release approval for a new revision tag (`r2`, etc.). Do not delete/repoint an existing release tag. A failed public-pull job can be rerun alone against the same assembled digest after investigating access/connectivity; it must not rebuild or replace the published image.
+- These controls protect this workflow; GHCR writers outside it must follow the same policy. Consumers must retain immutable digests rather than depend on tag immutability alone.
+- Candidate and published platform images run the isolated packaged-container contract test described in `scripts/va017-fixtures/README.md`. Config parsing, readiness, two-subgraph queries, synthetic auth/header propagation, denial behavior, metrics and SIGTERM are checked. Source suites retain subscription/upload coverage; their application end-to-end verification remains staging-only.
+- Scan summaries fail if expected Debian OS/package coverage is absent or malformed, or if the arm64 baseline is missing. Complete package coverage with genuinely no findings is still valid. Negative tests protect this distinction; no CVEs are suppressed.
+
+### Consumer configuration warning discovered by the packaged test
+
+The captured Graph configuration starts successfully on 2.18.0 and passes header propagation, but emits an automatic configuration-upgrade warning: `headers.all.request` now wraps its rules under `operations`. Update the owning Graph config and chart copy in the consumer adoption PR and verify rendered staging/SIT/UAT configuration. Keep the old-shape fixture here as an explicit backward-compatibility control. This warning is not a failed query and is not fixed by changing only the base image.

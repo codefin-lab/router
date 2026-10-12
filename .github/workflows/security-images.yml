@@ -43,6 +43,8 @@ jobs:
           sha256sum /tmp/router-candidate.tar > security-reports/image-archive.sha256
           git rev-parse HEAD > security-reports/source-commit.txt
           docker run --rm --entrypoint dpkg-query router-candidate:scan -W > security-reports/debian-packages.txt
+      - name: Test candidate with synthetic subgraphs
+        run: python3 scripts/va017_container_smoke.py router-candidate:scan security-reports
       - name: Scan actual candidate image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:

@@ -5,6 +5,10 @@ on:
     tags:
       - "v*"
 
+concurrency:
+  group: router-image-release
+  cancel-in-progress: false
+
 permissions:
   contents: read
   packages: write
@@ -14,7 +18,16 @@ env:
   IMAGE_NAME: codefin-lab/router
 
 jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Reject existing release tags and reruns
+        run: python3 scripts/va017_release_guard.py "$GITHUB_REF_NAME"
   release-docker:
+    needs: preflight
     name: Build & Push Docker Image
     strategy:
       fail-fast: false
@@ -31,6 +44,8 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 (Node.js 24)
 
+      - name: Reject partial release rerun
+        run: test "$GITHUB_RUN_ATTEMPT" = 1
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
@@ -40,7 +55,7 @@ jobs:
 
       - name: Extract version
         id: version
-        run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -68,6 +83,10 @@ jobs:
           docker run --rm "$REGISTRY/$IMAGE_NAME@$DIGEST" --version | tee security-reports/version.txt
           grep -F '2.18.0' security-reports/version.txt
           docker buildx imagetools inspect "$REGISTRY/$IMAGE_NAME@$DIGEST" --raw > security-reports/manifest.json
+      - name: Test published container with synthetic subgraphs
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: python3 scripts/va017_container_smoke.py "$REGISTRY/$IMAGE_NAME@$DIGEST" security-reports
       - name: Scan published digest
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -106,6 +125,9 @@ jobs:
     needs: release-docker
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Recheck final version is absent
+        run: python3 scripts/va017_release_guard.py "$GITHUB_REF_NAME" --index-only
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ${{ env.REGISTRY }}
@@ -166,4 +188,4 @@ jobs:
           test "$(docker image inspect "$image" --format '{{.Architecture}}')" = "$SCAN_ARCH"
           docker --config "$anonymous_config" run --rm --pull=never "$image" --version | tee version.txt
           grep -F '2.18.0' version.txt
-          printf 'Anonymous pull and version check passed: `%s` on `linux/%s`\n' "$image" "$SCAN_ARCH" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Anonymous pull and version check passed: %s on linux/%s\n' "$image" "$SCAN_ARCH" >> "$GITHUB_STEP_SUMMARY"
