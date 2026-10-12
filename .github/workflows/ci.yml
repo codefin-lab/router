@@ -77,7 +77,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           cargo test --locked -p apollo-router --lib -- --list > /tmp/router-tests.txt
-          for suite in feature_gate_enforcement plugins::authentication plugins::authorization plugins::subscription file_uploads services::hickory_dns_connector services::http::service plugins::telemetry::reload; do
+          for suite in feature_gate_enforcement plugins::authentication plugins::authorization plugins::subscription file_uploads services::hickory_dns_connector services::http::service plugins::telemetry::reload plugins::rhai services::supergraph; do
             grep -F "$suite" /tmp/router-tests.txt | grep -q ': test$'
             cargo test --locked -p apollo-router --lib "$suite"
           done
+
+      - name: Security backport HTTP integration tests
+        if: ${{ !cancelled() }}
+        run: |
+          cargo test --locked -p apollo-router --test integration_tests internal_query_planner_error_is_redacted_from_client_response
+          cargo test --locked -p apollo-router --test integration_tests client_errors_omit_rhai
+          cargo test --locked -p apollo-router --test integration_tests cancelled_by_rhai
+          cargo test --locked -p apollo-router --test integration_tests integration::query_planner::fed2_schema_with_new_qp
