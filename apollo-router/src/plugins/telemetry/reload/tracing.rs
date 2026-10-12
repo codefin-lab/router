@@ -241,4 +241,62 @@ mod bounded_baggage_tests {
         assert!(cx.span().span_context().is_valid());
         assert_eq!(cx.baggage().len(), 0);
     }
+    #[test]
+    fn configured_factory_bounds_http_headers() {
+        use opentelemetry::trace::TraceContextExt;
+        for enabled in [false, true] {
+            let tracing = Tracing {
+                propagation: Propagation {
+                    baggage: enabled,
+                    trace_context: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let p = create_propagator(&tracing.propagation, &tracing);
+            for size in [8192, 8193] {
+                // Several entries keep each value below the SDK's per-entry limit.
+                let value = format!(
+                    "a={},b={},c={}",
+                    "x".repeat(3000),
+                    "y".repeat(3000),
+                    "z".repeat(size - 6008)
+                );
+                assert_eq!(value.len(), size);
+                let mut headers = http::HeaderMap::new();
+                headers.insert("baggage", value.parse().unwrap());
+                headers.insert(
+                    "traceparent",
+                    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+                        .parse()
+                        .unwrap(),
+                );
+                let cx = p.extract_with_context(
+                    &opentelemetry::Context::new(),
+                    &opentelemetry_http::HeaderExtractor(&headers),
+                );
+                assert_eq!(
+                    cx.baggage().len(),
+                    if enabled && size == 8192 { 3 } else { 0 }
+                );
+                assert!(cx.span().span_context().is_valid());
+            }
+            for count in [64, 65] {
+                let value = (0..count)
+                    .map(|i| format!("k{i}=v"))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let mut headers = http::HeaderMap::new();
+                headers.insert("baggage", value.parse().unwrap());
+                let cx = p.extract_with_context(
+                    &opentelemetry::Context::new(),
+                    &opentelemetry_http::HeaderExtractor(&headers),
+                );
+                assert_eq!(
+                    cx.baggage().len(),
+                    if enabled && count == 64 { 64 } else { 0 }
+                );
+            }
+        }
+    }
 }
