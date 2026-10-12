@@ -31,42 +31,49 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
                         Expression(
                             Expression {
                                 expression: JSONSelection {
-                                    inner: Path(
-                                        PathSelection {
-                                            path: WithRange {
-                                                node: Var(
-                                                    WithRange {
-                                                        node: $args,
-                                                        range: Some(
-                                                            0..5,
-                                                        ),
-                                                    },
-                                                    WithRange {
-                                                        node: Key(
+                                    inner: Value(
+                                        WithRange {
+                                            node: Path(
+                                                PathSelection {
+                                                    path: WithRange {
+                                                        node: Var(
                                                             WithRange {
-                                                                node: Field(
-                                                                    "id",
-                                                                ),
+                                                                node: $args,
                                                                 range: Some(
-                                                                    6..8,
+                                                                    0..5,
                                                                 ),
                                                             },
                                                             WithRange {
-                                                                node: Empty,
+                                                                node: Key(
+                                                                    WithRange {
+                                                                        node: Field(
+                                                                            "id",
+                                                                        ),
+                                                                        range: Some(
+                                                                            6..8,
+                                                                        ),
+                                                                    },
+                                                                    WithRange {
+                                                                        node: Empty,
+                                                                        range: Some(
+                                                                            8..8,
+                                                                        ),
+                                                                    },
+                                                                ),
                                                                 range: Some(
-                                                                    8..8,
+                                                                    5..8,
                                                                 ),
                                                             },
                                                         ),
                                                         range: Some(
-                                                            5..8,
+                                                            0..8,
                                                         ),
                                                     },
-                                                ),
-                                                range: Some(
-                                                    0..8,
-                                                ),
-                                            },
+                                                },
+                                            ),
+                                            range: Some(
+                                                0..8,
+                                            ),
                                         },
                                     ),
                                     spec: V0_1,
@@ -91,80 +98,101 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
                     selections: [
                         NamedSelection {
                             prefix: None,
-                            path: PathSelection {
-                                path: WithRange {
-                                    node: Key(
-                                        WithRange {
-                                            node: Field(
-                                                "id",
+                            path: WithRange {
+                                node: Path(
+                                    PathSelection {
+                                        path: WithRange {
+                                            node: Key(
+                                                WithRange {
+                                                    node: Field(
+                                                        "id",
+                                                    ),
+                                                    range: Some(
+                                                        0..2,
+                                                    ),
+                                                },
+                                                WithRange {
+                                                    node: Empty,
+                                                    range: Some(
+                                                        2..2,
+                                                    ),
+                                                },
                                             ),
                                             range: Some(
                                                 0..2,
                                             ),
                                         },
-                                        WithRange {
-                                            node: Empty,
-                                            range: Some(
-                                                2..2,
-                                            ),
-                                        },
-                                    ),
-                                    range: Some(
-                                        0..2,
-                                    ),
-                                },
+                                    },
+                                ),
+                                range: Some(
+                                    0..2,
+                                ),
                             },
                         },
                         NamedSelection {
                             prefix: None,
-                            path: PathSelection {
-                                path: WithRange {
-                                    node: Key(
-                                        WithRange {
-                                            node: Field(
-                                                "id2",
+                            path: WithRange {
+                                node: Path(
+                                    PathSelection {
+                                        path: WithRange {
+                                            node: Key(
+                                                WithRange {
+                                                    node: Field(
+                                                        "id2",
+                                                    ),
+                                                    range: Some(
+                                                        3..6,
+                                                    ),
+                                                },
+                                                WithRange {
+                                                    node: Empty,
+                                                    range: Some(
+                                                        6..6,
+                                                    ),
+                                                },
                                             ),
                                             range: Some(
                                                 3..6,
                                             ),
                                         },
-                                        WithRange {
-                                            node: Empty,
-                                            range: Some(
-                                                6..6,
-                                            ),
-                                        },
-                                    ),
-                                    range: Some(
-                                        3..6,
-                                    ),
-                                },
+                                    },
+                                ),
+                                range: Some(
+                                    3..6,
+                                ),
                             },
                         },
                         NamedSelection {
                             prefix: None,
-                            path: PathSelection {
-                                path: WithRange {
-                                    node: Key(
-                                        WithRange {
-                                            node: Field(
-                                                "unselected",
+                            path: WithRange {
+                                node: Path(
+                                    PathSelection {
+                                        path: WithRange {
+                                            node: Key(
+                                                WithRange {
+                                                    node: Field(
+                                                        "unselected",
+                                                    ),
+                                                    range: Some(
+                                                        7..17,
+                                                    ),
+                                                },
+                                                WithRange {
+                                                    node: Empty,
+                                                    range: Some(
+                                                        17..17,
+                                                    ),
+                                                },
                                             ),
                                             range: Some(
                                                 7..17,
                                             ),
                                         },
-                                        WithRange {
-                                            node: Empty,
-                                            range: Some(
-                                                17..17,
-                                            ),
-                                        },
-                                    ),
-                                    range: Some(
-                                        7..17,
-                                    ),
-                                },
+                                    },
+                                ),
+                                range: Some(
+                                    7..17,
+                                ),
                             },
                         },
                     ],
@@ -201,6 +229,11 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
             connect_extensions: None,
             connect_is_success: None,
         },
+        output_type: Some(
+            Named(
+                "T",
+            ),
+        ),
         label: Label(
             "one. http: GET http://localhost/ts/{$args.id}",
         ),
@@ -232,42 +265,49 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
                         Expression(
                             Expression {
                                 expression: JSONSelection {
-                                    inner: Path(
-                                        PathSelection {
-                                            path: WithRange {
-                                                node: Var(
-                                                    WithRange {
-                                                        node: $args,
-                                                        range: Some(
-                                                            0..5,
-                                                        ),
-                                                    },
-                                                    WithRange {
-                                                        node: Key(
+                                    inner: Value(
+                                        WithRange {
+                                            node: Path(
+                                                PathSelection {
+                                                    path: WithRange {
+                                                        node: Var(
                                                             WithRange {
-                                                                node: Field(
-                                                                    "id",
-                                                                ),
+                                                                node: $args,
                                                                 range: Some(
-                                                                    6..8,
+                                                                    0..5,
                                                                 ),
                                                             },
                                                             WithRange {
-                                                                node: Empty,
+                                                                node: Key(
+                                                                    WithRange {
+                                                                        node: Field(
+                                                                            "id",
+                                                                        ),
+                                                                        range: Some(
+                                                                            6..8,
+                                                                        ),
+                                                                    },
+                                                                    WithRange {
+                                                                        node: Empty,
+                                                                        range: Some(
+                                                                            8..8,
+                                                                        ),
+                                                                    },
+                                                                ),
                                                                 range: Some(
-                                                                    8..8,
+                                                                    5..8,
                                                                 ),
                                                             },
                                                         ),
                                                         range: Some(
-                                                            5..8,
+                                                            0..8,
                                                         ),
                                                     },
-                                                ),
-                                                range: Some(
-                                                    0..8,
-                                                ),
-                                            },
+                                                },
+                                            ),
+                                            range: Some(
+                                                0..8,
+                                            ),
                                         },
                                     ),
                                     spec: V0_1,
@@ -284,42 +324,49 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
                         Expression(
                             Expression {
                                 expression: JSONSelection {
-                                    inner: Path(
-                                        PathSelection {
-                                            path: WithRange {
-                                                node: Var(
-                                                    WithRange {
-                                                        node: $args,
-                                                        range: Some(
-                                                            0..5,
-                                                        ),
-                                                    },
-                                                    WithRange {
-                                                        node: Key(
+                                    inner: Value(
+                                        WithRange {
+                                            node: Path(
+                                                PathSelection {
+                                                    path: WithRange {
+                                                        node: Var(
                                                             WithRange {
-                                                                node: Field(
-                                                                    "id2",
-                                                                ),
+                                                                node: $args,
                                                                 range: Some(
-                                                                    6..9,
+                                                                    0..5,
                                                                 ),
                                                             },
                                                             WithRange {
-                                                                node: Empty,
+                                                                node: Key(
+                                                                    WithRange {
+                                                                        node: Field(
+                                                                            "id2",
+                                                                        ),
+                                                                        range: Some(
+                                                                            6..9,
+                                                                        ),
+                                                                    },
+                                                                    WithRange {
+                                                                        node: Empty,
+                                                                        range: Some(
+                                                                            9..9,
+                                                                        ),
+                                                                    },
+                                                                ),
                                                                 range: Some(
-                                                                    9..9,
+                                                                    5..9,
                                                                 ),
                                                             },
                                                         ),
                                                         range: Some(
-                                                            5..9,
+                                                            0..9,
                                                         ),
                                                     },
-                                                ),
-                                                range: Some(
-                                                    0..9,
-                                                ),
-                                            },
+                                                },
+                                            ),
+                                            range: Some(
+                                                0..9,
+                                            ),
                                         },
                                     ),
                                     spec: V0_1,
@@ -344,80 +391,101 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
                     selections: [
                         NamedSelection {
                             prefix: None,
-                            path: PathSelection {
-                                path: WithRange {
-                                    node: Key(
-                                        WithRange {
-                                            node: Field(
-                                                "id",
+                            path: WithRange {
+                                node: Path(
+                                    PathSelection {
+                                        path: WithRange {
+                                            node: Key(
+                                                WithRange {
+                                                    node: Field(
+                                                        "id",
+                                                    ),
+                                                    range: Some(
+                                                        0..2,
+                                                    ),
+                                                },
+                                                WithRange {
+                                                    node: Empty,
+                                                    range: Some(
+                                                        2..2,
+                                                    ),
+                                                },
                                             ),
                                             range: Some(
                                                 0..2,
                                             ),
                                         },
-                                        WithRange {
-                                            node: Empty,
-                                            range: Some(
-                                                2..2,
-                                            ),
-                                        },
-                                    ),
-                                    range: Some(
-                                        0..2,
-                                    ),
-                                },
+                                    },
+                                ),
+                                range: Some(
+                                    0..2,
+                                ),
                             },
                         },
                         NamedSelection {
                             prefix: None,
-                            path: PathSelection {
-                                path: WithRange {
-                                    node: Key(
-                                        WithRange {
-                                            node: Field(
-                                                "id2",
+                            path: WithRange {
+                                node: Path(
+                                    PathSelection {
+                                        path: WithRange {
+                                            node: Key(
+                                                WithRange {
+                                                    node: Field(
+                                                        "id2",
+                                                    ),
+                                                    range: Some(
+                                                        3..6,
+                                                    ),
+                                                },
+                                                WithRange {
+                                                    node: Empty,
+                                                    range: Some(
+                                                        6..6,
+                                                    ),
+                                                },
                                             ),
                                             range: Some(
                                                 3..6,
                                             ),
                                         },
-                                        WithRange {
-                                            node: Empty,
-                                            range: Some(
-                                                6..6,
-                                            ),
-                                        },
-                                    ),
-                                    range: Some(
-                                        3..6,
-                                    ),
-                                },
+                                    },
+                                ),
+                                range: Some(
+                                    3..6,
+                                ),
                             },
                         },
                         NamedSelection {
                             prefix: None,
-                            path: PathSelection {
-                                path: WithRange {
-                                    node: Key(
-                                        WithRange {
-                                            node: Field(
-                                                "unselected",
+                            path: WithRange {
+                                node: Path(
+                                    PathSelection {
+                                        path: WithRange {
+                                            node: Key(
+                                                WithRange {
+                                                    node: Field(
+                                                        "unselected",
+                                                    ),
+                                                    range: Some(
+                                                        7..17,
+                                                    ),
+                                                },
+                                                WithRange {
+                                                    node: Empty,
+                                                    range: Some(
+                                                        17..17,
+                                                    ),
+                                                },
                                             ),
                                             range: Some(
                                                 7..17,
                                             ),
                                         },
-                                        WithRange {
-                                            node: Empty,
-                                            range: Some(
-                                                17..17,
-                                            ),
-                                        },
-                                    ),
-                                    range: Some(
-                                        7..17,
-                                    ),
-                                },
+                                    },
+                                ),
+                                range: Some(
+                                    7..17,
+                                ),
                             },
                         },
                     ],
@@ -455,6 +523,11 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
             connect_extensions: None,
             connect_is_success: None,
         },
+        output_type: Some(
+            Named(
+                "T",
+            ),
+        ),
         label: Label(
             "one. http: GET http://localhost/ts/{$args.id}?id2={$args.id2}",
         ),
@@ -486,42 +559,49 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
                         Expression(
                             Expression {
                                 expression: JSONSelection {
-                                    inner: Path(
-                                        PathSelection {
-                                            path: WithRange {
-                                                node: Var(
-                                                    WithRange {
-                                                        node: $args,
-                                                        range: Some(
-                                                            0..5,
-                                                        ),
-                                                    },
-                                                    WithRange {
-                                                        node: Key(
+                                    inner: Value(
+                                        WithRange {
+                                            node: Path(
+                                                PathSelection {
+                                                    path: WithRange {
+                                                        node: Var(
                                                             WithRange {
-                                                                node: Field(
-                                                                    "unselected",
-                                                                ),
+                                                                node: $args,
                                                                 range: Some(
-                                                                    6..16,
+                                                                    0..5,
                                                                 ),
                                                             },
                                                             WithRange {
-                                                                node: Empty,
+                                                                node: Key(
+                                                                    WithRange {
+                                                                        node: Field(
+                                                                            "unselected",
+                                                                        ),
+                                                                        range: Some(
+                                                                            6..16,
+                                                                        ),
+                                                                    },
+                                                                    WithRange {
+                                                                        node: Empty,
+                                                                        range: Some(
+                                                                            16..16,
+                                                                        ),
+                                                                    },
+                                                                ),
                                                                 range: Some(
-                                                                    16..16,
+                                                                    5..16,
                                                                 ),
                                                             },
                                                         ),
                                                         range: Some(
-                                                            5..16,
+                                                            0..16,
                                                         ),
                                                     },
-                                                ),
-                                                range: Some(
-                                                    0..16,
-                                                ),
-                                            },
+                                                },
+                                            ),
+                                            range: Some(
+                                                0..16,
+                                            ),
                                         },
                                     ),
                                     spec: V0_1,
@@ -546,80 +626,101 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
                     selections: [
                         NamedSelection {
                             prefix: None,
-                            path: PathSelection {
-                                path: WithRange {
-                                    node: Key(
-                                        WithRange {
-                                            node: Field(
-                                                "id",
+                            path: WithRange {
+                                node: Path(
+                                    PathSelection {
+                                        path: WithRange {
+                                            node: Key(
+                                                WithRange {
+                                                    node: Field(
+                                                        "id",
+                                                    ),
+                                                    range: Some(
+                                                        0..2,
+                                                    ),
+                                                },
+                                                WithRange {
+                                                    node: Empty,
+                                                    range: Some(
+                                                        2..2,
+                                                    ),
+                                                },
                                             ),
                                             range: Some(
                                                 0..2,
                                             ),
                                         },
-                                        WithRange {
-                                            node: Empty,
-                                            range: Some(
-                                                2..2,
-                                            ),
-                                        },
-                                    ),
-                                    range: Some(
-                                        0..2,
-                                    ),
-                                },
+                                    },
+                                ),
+                                range: Some(
+                                    0..2,
+                                ),
                             },
                         },
                         NamedSelection {
                             prefix: None,
-                            path: PathSelection {
-                                path: WithRange {
-                                    node: Key(
-                                        WithRange {
-                                            node: Field(
-                                                "id2",
+                            path: WithRange {
+                                node: Path(
+                                    PathSelection {
+                                        path: WithRange {
+                                            node: Key(
+                                                WithRange {
+                                                    node: Field(
+                                                        "id2",
+                                                    ),
+                                                    range: Some(
+                                                        3..6,
+                                                    ),
+                                                },
+                                                WithRange {
+                                                    node: Empty,
+                                                    range: Some(
+                                                        6..6,
+                                                    ),
+                                                },
                                             ),
                                             range: Some(
                                                 3..6,
                                             ),
                                         },
-                                        WithRange {
-                                            node: Empty,
-                                            range: Some(
-                                                6..6,
-                                            ),
-                                        },
-                                    ),
-                                    range: Some(
-                                        3..6,
-                                    ),
-                                },
+                                    },
+                                ),
+                                range: Some(
+                                    3..6,
+                                ),
                             },
                         },
                         NamedSelection {
                             prefix: None,
-                            path: PathSelection {
-                                path: WithRange {
-                                    node: Key(
-                                        WithRange {
-                                            node: Field(
-                                                "accessibleByUnselected",
+                            path: WithRange {
+                                node: Path(
+                                    PathSelection {
+                                        path: WithRange {
+                                            node: Key(
+                                                WithRange {
+                                                    node: Field(
+                                                        "accessibleByUnselected",
+                                                    ),
+                                                    range: Some(
+                                                        7..29,
+                                                    ),
+                                                },
+                                                WithRange {
+                                                    node: Empty,
+                                                    range: Some(
+                                                        29..29,
+                                                    ),
+                                                },
                                             ),
                                             range: Some(
                                                 7..29,
                                             ),
                                         },
-                                        WithRange {
-                                            node: Empty,
-                                            range: Some(
-                                                29..29,
-                                            ),
-                                        },
-                                    ),
-                                    range: Some(
-                                        7..29,
-                                    ),
-                                },
+                                    },
+                                ),
+                                range: Some(
+                                    7..29,
+                                ),
                             },
                         },
                     ],
@@ -656,6 +757,11 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
             connect_extensions: None,
             connect_is_success: None,
         },
+        output_type: Some(
+            Named(
+                "T",
+            ),
+        ),
         label: Label(
             "one. http: GET http://localhost/ts/{$args.unselected}",
         ),
@@ -687,42 +793,49 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
                         Expression(
                             Expression {
                                 expression: JSONSelection {
-                                    inner: Path(
-                                        PathSelection {
-                                            path: WithRange {
-                                                node: Var(
-                                                    WithRange {
-                                                        node: $this,
-                                                        range: Some(
-                                                            0..5,
-                                                        ),
-                                                    },
-                                                    WithRange {
-                                                        node: Key(
+                                    inner: Value(
+                                        WithRange {
+                                            node: Path(
+                                                PathSelection {
+                                                    path: WithRange {
+                                                        node: Var(
                                                             WithRange {
-                                                                node: Field(
-                                                                    "id",
-                                                                ),
+                                                                node: $this,
                                                                 range: Some(
-                                                                    6..8,
+                                                                    0..5,
                                                                 ),
                                                             },
                                                             WithRange {
-                                                                node: Empty,
+                                                                node: Key(
+                                                                    WithRange {
+                                                                        node: Field(
+                                                                            "id",
+                                                                        ),
+                                                                        range: Some(
+                                                                            6..8,
+                                                                        ),
+                                                                    },
+                                                                    WithRange {
+                                                                        node: Empty,
+                                                                        range: Some(
+                                                                            8..8,
+                                                                        ),
+                                                                    },
+                                                                ),
                                                                 range: Some(
-                                                                    8..8,
+                                                                    5..8,
                                                                 ),
                                                             },
                                                         ),
                                                         range: Some(
-                                                            5..8,
+                                                            0..8,
                                                         ),
                                                     },
-                                                ),
-                                                range: Some(
-                                                    0..8,
-                                                ),
-                                            },
+                                                },
+                                            ),
+                                            range: Some(
+                                                0..8,
+                                            ),
                                         },
                                     ),
                                     spec: V0_1,
@@ -747,54 +860,68 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
                     selections: [
                         NamedSelection {
                             prefix: None,
-                            path: PathSelection {
-                                path: WithRange {
-                                    node: Key(
-                                        WithRange {
-                                            node: Field(
-                                                "id",
+                            path: WithRange {
+                                node: Path(
+                                    PathSelection {
+                                        path: WithRange {
+                                            node: Key(
+                                                WithRange {
+                                                    node: Field(
+                                                        "id",
+                                                    ),
+                                                    range: Some(
+                                                        0..2,
+                                                    ),
+                                                },
+                                                WithRange {
+                                                    node: Empty,
+                                                    range: Some(
+                                                        2..2,
+                                                    ),
+                                                },
                                             ),
                                             range: Some(
                                                 0..2,
                                             ),
                                         },
-                                        WithRange {
-                                            node: Empty,
-                                            range: Some(
-                                                2..2,
-                                            ),
-                                        },
-                                    ),
-                                    range: Some(
-                                        0..2,
-                                    ),
-                                },
+                                    },
+                                ),
+                                range: Some(
+                                    0..2,
+                                ),
                             },
                         },
                         NamedSelection {
                             prefix: None,
-                            path: PathSelection {
-                                path: WithRange {
-                                    node: Key(
-                                        WithRange {
-                                            node: Field(
-                                                "id2",
+                            path: WithRange {
+                                node: Path(
+                                    PathSelection {
+                                        path: WithRange {
+                                            node: Key(
+                                                WithRange {
+                                                    node: Field(
+                                                        "id2",
+                                                    ),
+                                                    range: Some(
+                                                        3..6,
+                                                    ),
+                                                },
+                                                WithRange {
+                                                    node: Empty,
+                                                    range: Some(
+                                                        6..6,
+                                                    ),
+                                                },
                                             ),
                                             range: Some(
                                                 3..6,
                                             ),
                                         },
-                                        WithRange {
-                                            node: Empty,
-                                            range: Some(
-                                                6..6,
-                                            ),
-                                        },
-                                    ),
-                                    range: Some(
-                                        3..6,
-                                    ),
-                                },
+                                    },
+                                ),
+                                range: Some(
+                                    3..6,
+                                ),
                             },
                         },
                     ],
@@ -831,6 +958,11 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
             connect_extensions: None,
             connect_is_success: None,
         },
+        output_type: Some(
+            Named(
+                "R",
+            ),
+        ),
         label: Label(
             "one. http: GET http://localhost/rs/{$this.id}",
         ),
@@ -862,42 +994,49 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
                         Expression(
                             Expression {
                                 expression: JSONSelection {
-                                    inner: Path(
-                                        PathSelection {
-                                            path: WithRange {
-                                                node: Var(
-                                                    WithRange {
-                                                        node: $this,
-                                                        range: Some(
-                                                            0..5,
-                                                        ),
-                                                    },
-                                                    WithRange {
-                                                        node: Key(
+                                    inner: Value(
+                                        WithRange {
+                                            node: Path(
+                                                PathSelection {
+                                                    path: WithRange {
+                                                        node: Var(
                                                             WithRange {
-                                                                node: Field(
-                                                                    "id",
-                                                                ),
+                                                                node: $this,
                                                                 range: Some(
-                                                                    6..8,
+                                                                    0..5,
                                                                 ),
                                                             },
                                                             WithRange {
-                                                                node: Empty,
+                                                                node: Key(
+                                                                    WithRange {
+                                                                        node: Field(
+                                                                            "id",
+                                                                        ),
+                                                                        range: Some(
+                                                                            6..8,
+                                                                        ),
+                                                                    },
+                                                                    WithRange {
+                                                                        node: Empty,
+                                                                        range: Some(
+                                                                            8..8,
+                                                                        ),
+                                                                    },
+                                                                ),
                                                                 range: Some(
-                                                                    8..8,
+                                                                    5..8,
                                                                 ),
                                                             },
                                                         ),
                                                         range: Some(
-                                                            5..8,
+                                                            0..8,
                                                         ),
                                                     },
-                                                ),
-                                                range: Some(
-                                                    0..8,
-                                                ),
-                                            },
+                                                },
+                                            ),
+                                            range: Some(
+                                                0..8,
+                                            ),
                                         },
                                     ),
                                     spec: V0_1,
@@ -914,42 +1053,49 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
                         Expression(
                             Expression {
                                 expression: JSONSelection {
-                                    inner: Path(
-                                        PathSelection {
-                                            path: WithRange {
-                                                node: Var(
-                                                    WithRange {
-                                                        node: $this,
-                                                        range: Some(
-                                                            0..5,
-                                                        ),
-                                                    },
-                                                    WithRange {
-                                                        node: Key(
+                                    inner: Value(
+                                        WithRange {
+                                            node: Path(
+                                                PathSelection {
+                                                    path: WithRange {
+                                                        node: Var(
                                                             WithRange {
-                                                                node: Field(
-                                                                    "id2",
-                                                                ),
+                                                                node: $this,
                                                                 range: Some(
-                                                                    6..9,
+                                                                    0..5,
                                                                 ),
                                                             },
                                                             WithRange {
-                                                                node: Empty,
+                                                                node: Key(
+                                                                    WithRange {
+                                                                        node: Field(
+                                                                            "id2",
+                                                                        ),
+                                                                        range: Some(
+                                                                            6..9,
+                                                                        ),
+                                                                    },
+                                                                    WithRange {
+                                                                        node: Empty,
+                                                                        range: Some(
+                                                                            9..9,
+                                                                        ),
+                                                                    },
+                                                                ),
                                                                 range: Some(
-                                                                    9..9,
+                                                                    5..9,
                                                                 ),
                                                             },
                                                         ),
                                                         range: Some(
-                                                            5..9,
+                                                            0..9,
                                                         ),
                                                     },
-                                                ),
-                                                range: Some(
-                                                    0..9,
-                                                ),
-                                            },
+                                                },
+                                            ),
+                                            range: Some(
+                                                0..9,
+                                            ),
                                         },
                                     ),
                                     spec: V0_1,
@@ -974,54 +1120,68 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
                     selections: [
                         NamedSelection {
                             prefix: None,
-                            path: PathSelection {
-                                path: WithRange {
-                                    node: Key(
-                                        WithRange {
-                                            node: Field(
-                                                "id",
+                            path: WithRange {
+                                node: Path(
+                                    PathSelection {
+                                        path: WithRange {
+                                            node: Key(
+                                                WithRange {
+                                                    node: Field(
+                                                        "id",
+                                                    ),
+                                                    range: Some(
+                                                        0..2,
+                                                    ),
+                                                },
+                                                WithRange {
+                                                    node: Empty,
+                                                    range: Some(
+                                                        2..2,
+                                                    ),
+                                                },
                                             ),
                                             range: Some(
                                                 0..2,
                                             ),
                                         },
-                                        WithRange {
-                                            node: Empty,
-                                            range: Some(
-                                                2..2,
-                                            ),
-                                        },
-                                    ),
-                                    range: Some(
-                                        0..2,
-                                    ),
-                                },
+                                    },
+                                ),
+                                range: Some(
+                                    0..2,
+                                ),
                             },
                         },
                         NamedSelection {
                             prefix: None,
-                            path: PathSelection {
-                                path: WithRange {
-                                    node: Key(
-                                        WithRange {
-                                            node: Field(
-                                                "id2",
+                            path: WithRange {
+                                node: Path(
+                                    PathSelection {
+                                        path: WithRange {
+                                            node: Key(
+                                                WithRange {
+                                                    node: Field(
+                                                        "id2",
+                                                    ),
+                                                    range: Some(
+                                                        3..6,
+                                                    ),
+                                                },
+                                                WithRange {
+                                                    node: Empty,
+                                                    range: Some(
+                                                        6..6,
+                                                    ),
+                                                },
                                             ),
                                             range: Some(
                                                 3..6,
                                             ),
                                         },
-                                        WithRange {
-                                            node: Empty,
-                                            range: Some(
-                                                6..6,
-                                            ),
-                                        },
-                                    ),
-                                    range: Some(
-                                        3..6,
-                                    ),
-                                },
+                                    },
+                                ),
+                                range: Some(
+                                    3..6,
+                                ),
                             },
                         },
                     ],
@@ -1059,6 +1219,11 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
             connect_extensions: None,
             connect_is_success: None,
         },
+        output_type: Some(
+            Named(
+                "R",
+            ),
+        ),
         label: Label(
             "one. http: GET http://localhost/rs/{$this.id}?id2={$this.id2}",
         ),
@@ -1090,42 +1255,49 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
                         Expression(
                             Expression {
                                 expression: JSONSelection {
-                                    inner: Path(
-                                        PathSelection {
-                                            path: WithRange {
-                                                node: Var(
-                                                    WithRange {
-                                                        node: $this,
-                                                        range: Some(
-                                                            0..5,
-                                                        ),
-                                                    },
-                                                    WithRange {
-                                                        node: Key(
+                                    inner: Value(
+                                        WithRange {
+                                            node: Path(
+                                                PathSelection {
+                                                    path: WithRange {
+                                                        node: Var(
                                                             WithRange {
-                                                                node: Field(
-                                                                    "id",
-                                                                ),
+                                                                node: $this,
                                                                 range: Some(
-                                                                    6..8,
+                                                                    0..5,
                                                                 ),
                                                             },
                                                             WithRange {
-                                                                node: Empty,
+                                                                node: Key(
+                                                                    WithRange {
+                                                                        node: Field(
+                                                                            "id",
+                                                                        ),
+                                                                        range: Some(
+                                                                            6..8,
+                                                                        ),
+                                                                    },
+                                                                    WithRange {
+                                                                        node: Empty,
+                                                                        range: Some(
+                                                                            8..8,
+                                                                        ),
+                                                                    },
+                                                                ),
                                                                 range: Some(
-                                                                    8..8,
+                                                                    5..8,
                                                                 ),
                                                             },
                                                         ),
                                                         range: Some(
-                                                            5..8,
+                                                            0..8,
                                                         ),
                                                     },
-                                                ),
-                                                range: Some(
-                                                    0..8,
-                                                ),
-                                            },
+                                                },
+                                            ),
+                                            range: Some(
+                                                0..8,
+                                            ),
                                         },
                                     ),
                                     spec: V0_1,
@@ -1150,28 +1322,35 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
                     selections: [
                         NamedSelection {
                             prefix: None,
-                            path: PathSelection {
-                                path: WithRange {
-                                    node: Key(
-                                        WithRange {
-                                            node: Field(
-                                                "id",
+                            path: WithRange {
+                                node: Path(
+                                    PathSelection {
+                                        path: WithRange {
+                                            node: Key(
+                                                WithRange {
+                                                    node: Field(
+                                                        "id",
+                                                    ),
+                                                    range: Some(
+                                                        0..2,
+                                                    ),
+                                                },
+                                                WithRange {
+                                                    node: Empty,
+                                                    range: Some(
+                                                        2..2,
+                                                    ),
+                                                },
                                             ),
                                             range: Some(
                                                 0..2,
                                             ),
                                         },
-                                        WithRange {
-                                            node: Empty,
-                                            range: Some(
-                                                2..2,
-                                            ),
-                                        },
-                                    ),
-                                    range: Some(
-                                        0..2,
-                                    ),
-                                },
+                                    },
+                                ),
+                                range: Some(
+                                    0..2,
+                                ),
                             },
                         },
                         NamedSelection {
@@ -1190,41 +1369,48 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
                                     ),
                                 },
                             ),
-                            path: PathSelection {
-                                path: WithRange {
-                                    node: Var(
-                                        WithRange {
-                                            node: $this,
-                                            range: Some(
-                                                8..13,
-                                            ),
-                                        },
-                                        WithRange {
-                                            node: Key(
+                            path: WithRange {
+                                node: Path(
+                                    PathSelection {
+                                        path: WithRange {
+                                            node: Var(
                                                 WithRange {
-                                                    node: Field(
-                                                        "id2",
-                                                    ),
+                                                    node: $this,
                                                     range: Some(
-                                                        14..17,
+                                                        8..13,
                                                     ),
                                                 },
                                                 WithRange {
-                                                    node: Empty,
+                                                    node: Key(
+                                                        WithRange {
+                                                            node: Field(
+                                                                "id2",
+                                                            ),
+                                                            range: Some(
+                                                                14..17,
+                                                            ),
+                                                        },
+                                                        WithRange {
+                                                            node: Empty,
+                                                            range: Some(
+                                                                17..17,
+                                                            ),
+                                                        },
+                                                    ),
                                                     range: Some(
-                                                        17..17,
+                                                        13..17,
                                                     ),
                                                 },
                                             ),
                                             range: Some(
-                                                13..17,
+                                                8..17,
                                             ),
                                         },
-                                    ),
-                                    range: Some(
-                                        8..17,
-                                    ),
-                                },
+                                    },
+                                ),
+                                range: Some(
+                                    8..17,
+                                ),
                             },
                         },
                     ],
@@ -1265,6 +1451,11 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
             connect_extensions: None,
             connect_is_success: None,
         },
+        output_type: Some(
+            Named(
+                "R",
+            ),
+        ),
         label: Label(
             "one. http: GET http://localhost/rs/{$this.id}",
         ),
@@ -1318,41 +1509,48 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
                                                 ),
                                             },
                                         ),
-                                        path: PathSelection {
-                                            path: WithRange {
-                                                node: Var(
-                                                    WithRange {
-                                                        node: $this,
-                                                        range: Some(
-                                                            4..9,
-                                                        ),
-                                                    },
-                                                    WithRange {
-                                                        node: Key(
+                                        path: WithRange {
+                                            node: Path(
+                                                PathSelection {
+                                                    path: WithRange {
+                                                        node: Var(
                                                             WithRange {
-                                                                node: Field(
-                                                                    "id",
-                                                                ),
+                                                                node: $this,
                                                                 range: Some(
-                                                                    10..12,
+                                                                    4..9,
                                                                 ),
                                                             },
                                                             WithRange {
-                                                                node: Empty,
+                                                                node: Key(
+                                                                    WithRange {
+                                                                        node: Field(
+                                                                            "id",
+                                                                        ),
+                                                                        range: Some(
+                                                                            10..12,
+                                                                        ),
+                                                                    },
+                                                                    WithRange {
+                                                                        node: Empty,
+                                                                        range: Some(
+                                                                            12..12,
+                                                                        ),
+                                                                    },
+                                                                ),
                                                                 range: Some(
-                                                                    12..12,
+                                                                    9..12,
                                                                 ),
                                                             },
                                                         ),
                                                         range: Some(
-                                                            9..12,
+                                                            4..12,
                                                         ),
                                                     },
-                                                ),
-                                                range: Some(
-                                                    4..12,
-                                                ),
-                                            },
+                                                },
+                                            ),
+                                            range: Some(
+                                                4..12,
+                                            ),
                                         },
                                     },
                                 ],
@@ -1376,54 +1574,68 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
                     selections: [
                         NamedSelection {
                             prefix: None,
-                            path: PathSelection {
-                                path: WithRange {
-                                    node: Key(
-                                        WithRange {
-                                            node: Field(
-                                                "id",
+                            path: WithRange {
+                                node: Path(
+                                    PathSelection {
+                                        path: WithRange {
+                                            node: Key(
+                                                WithRange {
+                                                    node: Field(
+                                                        "id",
+                                                    ),
+                                                    range: Some(
+                                                        0..2,
+                                                    ),
+                                                },
+                                                WithRange {
+                                                    node: Empty,
+                                                    range: Some(
+                                                        2..2,
+                                                    ),
+                                                },
                                             ),
                                             range: Some(
                                                 0..2,
                                             ),
                                         },
-                                        WithRange {
-                                            node: Empty,
-                                            range: Some(
-                                                2..2,
-                                            ),
-                                        },
-                                    ),
-                                    range: Some(
-                                        0..2,
-                                    ),
-                                },
+                                    },
+                                ),
+                                range: Some(
+                                    0..2,
+                                ),
                             },
                         },
                         NamedSelection {
                             prefix: None,
-                            path: PathSelection {
-                                path: WithRange {
-                                    node: Key(
-                                        WithRange {
-                                            node: Field(
-                                                "id2",
+                            path: WithRange {
+                                node: Path(
+                                    PathSelection {
+                                        path: WithRange {
+                                            node: Key(
+                                                WithRange {
+                                                    node: Field(
+                                                        "id2",
+                                                    ),
+                                                    range: Some(
+                                                        3..6,
+                                                    ),
+                                                },
+                                                WithRange {
+                                                    node: Empty,
+                                                    range: Some(
+                                                        6..6,
+                                                    ),
+                                                },
                                             ),
                                             range: Some(
                                                 3..6,
                                             ),
                                         },
-                                        WithRange {
-                                            node: Empty,
-                                            range: Some(
-                                                6..6,
-                                            ),
-                                        },
-                                    ),
-                                    range: Some(
-                                        3..6,
-                                    ),
-                                },
+                                    },
+                                ),
+                                range: Some(
+                                    3..6,
+                                ),
                             },
                         },
                     ],
@@ -1460,6 +1672,11 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
             connect_extensions: None,
             connect_is_success: None,
         },
+        output_type: Some(
+            Named(
+                "R",
+            ),
+        ),
         label: Label(
             "one. http: POST http://localhost/rs",
         ),
@@ -1513,41 +1730,48 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
                                                 ),
                                             },
                                         ),
-                                        path: PathSelection {
-                                            path: WithRange {
-                                                node: Var(
-                                                    WithRange {
-                                                        node: $this,
-                                                        range: Some(
-                                                            4..9,
-                                                        ),
-                                                    },
-                                                    WithRange {
-                                                        node: Key(
+                                        path: WithRange {
+                                            node: Path(
+                                                PathSelection {
+                                                    path: WithRange {
+                                                        node: Var(
                                                             WithRange {
-                                                                node: Field(
-                                                                    "id",
-                                                                ),
+                                                                node: $this,
                                                                 range: Some(
-                                                                    10..12,
+                                                                    4..9,
                                                                 ),
                                                             },
                                                             WithRange {
-                                                                node: Empty,
+                                                                node: Key(
+                                                                    WithRange {
+                                                                        node: Field(
+                                                                            "id",
+                                                                        ),
+                                                                        range: Some(
+                                                                            10..12,
+                                                                        ),
+                                                                    },
+                                                                    WithRange {
+                                                                        node: Empty,
+                                                                        range: Some(
+                                                                            12..12,
+                                                                        ),
+                                                                    },
+                                                                ),
                                                                 range: Some(
-                                                                    12..12,
+                                                                    9..12,
                                                                 ),
                                                             },
                                                         ),
                                                         range: Some(
-                                                            9..12,
+                                                            4..12,
                                                         ),
                                                     },
-                                                ),
-                                                range: Some(
-                                                    4..12,
-                                                ),
-                                            },
+                                                },
+                                            ),
+                                            range: Some(
+                                                4..12,
+                                            ),
                                         },
                                     },
                                 ],
@@ -1571,28 +1795,35 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
                     selections: [
                         NamedSelection {
                             prefix: None,
-                            path: PathSelection {
-                                path: WithRange {
-                                    node: Key(
-                                        WithRange {
-                                            node: Field(
-                                                "id",
+                            path: WithRange {
+                                node: Path(
+                                    PathSelection {
+                                        path: WithRange {
+                                            node: Key(
+                                                WithRange {
+                                                    node: Field(
+                                                        "id",
+                                                    ),
+                                                    range: Some(
+                                                        0..2,
+                                                    ),
+                                                },
+                                                WithRange {
+                                                    node: Empty,
+                                                    range: Some(
+                                                        2..2,
+                                                    ),
+                                                },
                                             ),
                                             range: Some(
                                                 0..2,
                                             ),
                                         },
-                                        WithRange {
-                                            node: Empty,
-                                            range: Some(
-                                                2..2,
-                                            ),
-                                        },
-                                    ),
-                                    range: Some(
-                                        0..2,
-                                    ),
-                                },
+                                    },
+                                ),
+                                range: Some(
+                                    0..2,
+                                ),
                             },
                         },
                         NamedSelection {
@@ -1611,41 +1842,48 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
                                     ),
                                 },
                             ),
-                            path: PathSelection {
-                                path: WithRange {
-                                    node: Var(
-                                        WithRange {
-                                            node: $this,
-                                            range: Some(
-                                                8..13,
-                                            ),
-                                        },
-                                        WithRange {
-                                            node: Key(
+                            path: WithRange {
+                                node: Path(
+                                    PathSelection {
+                                        path: WithRange {
+                                            node: Var(
                                                 WithRange {
-                                                    node: Field(
-                                                        "id2",
-                                                    ),
+                                                    node: $this,
                                                     range: Some(
-                                                        14..17,
+                                                        8..13,
                                                     ),
                                                 },
                                                 WithRange {
-                                                    node: Empty,
+                                                    node: Key(
+                                                        WithRange {
+                                                            node: Field(
+                                                                "id2",
+                                                            ),
+                                                            range: Some(
+                                                                14..17,
+                                                            ),
+                                                        },
+                                                        WithRange {
+                                                            node: Empty,
+                                                            range: Some(
+                                                                17..17,
+                                                            ),
+                                                        },
+                                                    ),
                                                     range: Some(
-                                                        17..17,
+                                                        13..17,
                                                     ),
                                                 },
                                             ),
                                             range: Some(
-                                                13..17,
+                                                8..17,
                                             ),
                                         },
-                                    ),
-                                    range: Some(
-                                        8..17,
-                                    ),
-                                },
+                                    },
+                                ),
+                                range: Some(
+                                    8..17,
+                                ),
                             },
                         },
                     ],
@@ -1686,6 +1924,11 @@ input_file: apollo-federation/src/connectors/expand/tests/schemas/expand/keys.gr
             connect_extensions: None,
             connect_is_success: None,
         },
+        output_type: Some(
+            Named(
+                "R",
+            ),
+        ),
         label: Label(
             "one. http: POST http://localhost/rs",
         ),

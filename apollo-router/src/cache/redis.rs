@@ -37,6 +37,8 @@ use parking_lot::RwLock;
 use tokio::sync::Mutex;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::AbortHandle;
+use tokio::time::Instant;
+use tokio::time::MissedTickBehavior;
 use tower::BoxError;
 use url::Url;
 
@@ -62,6 +64,9 @@ const SUPPORTED_REDIS_SCHEMES: [&str; 6] = [
 const DEFAULT_INTERNAL_REDIS_TIMEOUT: Duration = Duration::from_secs(10);
 /// Interval on which we send PING commands to the Redis servers.
 const REDIS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
+/// Sentinel argument sent with the replica keep-alive `PING`. Redis echoes it back and it shows up
+/// verbatim in `MONITOR`, so the ping is attributable to us when debugging (and in tests).
+const REPLICA_HEARTBEAT_PING_MSG: &str = "apollo-router-replica-heartbeat";
 
 /// Record a Redis error as a metric and emits an error-level log for it, independent of having an active connection
 fn record_redis_error(error: &RedisError, caller: &'static str, context: &'static str) {
@@ -133,6 +138,9 @@ struct DropSafeRedisPool {
     // metrics and so on
     caller: &'static str,
     heartbeat_abort_handle: AbortHandle,
+    // Keep-alive for replica connections; only present in cluster mode, where the router
+    // establishes replica connections. `None` otherwise.
+    replica_heartbeat_abort_handle: Option<AbortHandle>,
     watcher_abort_handle: AbortHandle,
     // Metrics collector handles its own abort and spawns a background task for gauge updates
     metrics_collector: RedisMetricsCollector,
@@ -158,6 +166,9 @@ impl Drop for DropSafeRedisPool {
         let inner = self.pool.clone();
         let caller = self.caller;
         self.heartbeat_abort_handle.abort();
+        if let Some(handle) = &self.replica_heartbeat_abort_handle {
+            handle.abort();
+        }
         self.watcher_abort_handle.abort();
 
         tokio::spawn(async move {
@@ -422,15 +433,18 @@ impl RedisCacheStorage {
                 // then recreate the client with a fresh view of the infrastructure
                 config.replica.ignore_reconnection_errors = false;
                 config.replica.primary_fallback = true;
-                // NOTE: lazy_connections must be true (fred's default). With eager connections,
-                // a replica connection failure during add_connection propagates via ? through
-                // sync_replicas and can trigger the reconnection policy pool-wide. With lazy
-                // connections, failures are deferred to per-command time and isolated. The
-                // RouteableReplicaFilter prevents ghost replicas from entering the routing
-                // table at topology sync time regardless, but lazy connections provide
-                // additional blast-radius isolation for replicas that pass the TCP probe but
-                // fail Redis protocol setup (AUTH, HELLO, etc).
-                config.replica.lazy_connections = true;
+                // NOTE: lazy_connections must be false! There's a bug in fred's round-robin logic
+                // for selecting replicas when in a cluster that has an even number of replicas.
+                // The details are roughly that when fred looks for a routeable replica, it
+                // increments its round-robin counter, and if it can't find one, it moves on to
+                // creating one but also increments the counter _again_ before requeuing the redis
+                // command to run. When there are, eg, 2 replicas, those requeues will make it so
+                // that fred always tries to route a command to a replica that has no connection.
+                // Redis CPU explodes, GETs fail and fallthrough to backends, and so on. Not great.
+                // Don't set this to true! We originally set it to true to have additional blast
+                // radius for sync failures but we now have a ReplicaFilter doing that work for us
+                // (by removing unrouteable replicas from what we try to route to)
+                config.replica.lazy_connections = false;
                 config.tcp = TcpConfig {
                     #[cfg(target_os = "linux")]
                     user_timeout: Some(self.redis_client_config.timeout),
@@ -457,10 +471,64 @@ impl RedisCacheStorage {
             ACTIVE_CLIENT_COUNT.fetch_add(1, Ordering::Relaxed);
         }
 
+        // When `required_to_start` is set, subscribe to each client's `connect`
+        // notification *before* kicking off connection tasks. fred's
+        // `Pool::wait_for_connect` subscribes only at the moment it is `.await`ed,
+        // so there is a race: if `connect_pool` exhausts its reconnection policy
+        // before `wait_for_connect` reaches the `recv()` call, the terminal
+        // `broadcast_connect(Err(..))` is fired before any subscriber exists. The
+        // broadcast channel does not buffer past events for late subscribers, and
+        // fred never sends another connect event (the pool has aborted), so
+        // `wait_for_connect` hangs indefinitely. We saw this surface in CI as the
+        // `connection_failure_blocks_startup` integration test timing out at the
+        // nextest 120 s deadline.
+        //
+        // We mirror fred's own `Pool::init` shape (clients/pool.rs `init`) which
+        // collects subscribers first and then calls `connect`, but keep the
+        // separate per-client `ConnectHandle`s that the downstream watcher task
+        // (see below) needs to detect a pool abort. This is a subscribe-before-
+        // publish fix; the broader connection lifecycle is unchanged.
+        let connect_rxs: Vec<_> = if self.redis_client_config.required_to_start {
+            client_pool
+                .clients()
+                .iter()
+                .map(|c| c.inner().notifications.connect.load().subscribe())
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         // NB: error is not recorded here as it will be observed by the task following `client.error_rx()`
         let client_handles = client_pool.connect_pool();
         if self.redis_client_config.required_to_start {
-            client_pool.wait_for_connect().await?;
+            // Drive each pre-subscribed receiver to its first event. If any
+            // client's connect attempts ultimately fail, surface that error so the
+            // router can refuse to start (the contract documented on
+            // `required_to_start`).
+            for mut rx in connect_rxs {
+                loop {
+                    match rx.recv().await {
+                        Ok(Ok(())) => break,
+                        Ok(Err(e)) => return Err(Box::new(e)),
+                        Err(RecvError::Lagged(_)) => {
+                            // A lag means the broadcast queue overflowed between
+                            // the subscribe and recv; this only happens under
+                            // extreme load and is not a connect failure, so
+                            // re-recv on the SAME rx to wait for the next event.
+                            // Without the inner loop, `continue` would advance
+                            // the outer `for` and drop this client's receiver
+                            // without ever observing its connect.
+                            continue;
+                        }
+                        Err(RecvError::Closed) => {
+                            return Err(Box::new(RedisError::new(
+                                RedisErrorKind::Canceled,
+                                "redis connect notification channel closed before any connect attempt completed",
+                            )));
+                        }
+                    }
+                }
+            }
             tracing::trace!("redis connections established");
         }
 
@@ -498,6 +566,28 @@ impl RedisCacheStorage {
                 .await
         });
 
+        // fred's heartbeat above only reaches the primary connection (its PING doesn't set
+        // `use_replica`). In cluster mode we also hold eager replica connections, so we run a
+        // second heartbeat to keep those sockets warm and prevent server-side idle reaping.
+        let replica_heartbeat_handle = if self.is_cluster {
+            let client_heartbeats = client_pool.clone();
+            let caller = self.redis_client_config.caller;
+            Some(tokio::spawn(async move {
+                let mut ticker = tokio::time::interval_at(
+                    Instant::now() + REDIS_HEARTBEAT_INTERVAL,
+                    REDIS_HEARTBEAT_INTERVAL,
+                );
+                ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+                loop {
+                    ticker.tick().await;
+                    ping_replicas(&client_heartbeats, caller).await;
+                }
+            }))
+        } else {
+            None
+        };
+
         let pooled_client_arc = Arc::new(client_pool);
         let metrics_collector = RedisMetricsCollector::new(
             pooled_client_arc.clone(),
@@ -509,6 +599,9 @@ impl RedisCacheStorage {
             pool: pooled_client_arc,
             caller: self.redis_client_config.caller,
             heartbeat_abort_handle: heartbeat_handle.abort_handle(),
+            replica_heartbeat_abort_handle: replica_heartbeat_handle
+                .as_ref()
+                .map(|h| h.abort_handle()),
             watcher_abort_handle: watcher_handle.abort_handle(),
             metrics_collector,
         };
@@ -938,6 +1031,46 @@ impl RedisCacheStorage {
             Ok(Box::pin(self.client().await?.scan(pattern, count, None)))
         }
     }
+}
+
+/// Send a keep-alive `PING` to the replica connections held by the pool, so eager replica sockets
+/// don't idle out (see [`REPLICA_HEARTBEAT_PING_MSG`]).
+///
+/// fred can't target a replica directly; it round-robins across a primary's replicas. So we send
+/// one ping per replica and let the round-robin spread them out. Interleaving traffic shares that
+/// counter and can skew a round (one replica pinged twice, another skipped), but that only happens
+/// when replica traffic is flowing and already keeping the sockets warm. When idle -- the case that
+/// causes reaping -- our N pings cover all N replicas.
+async fn ping_replicas(pool: &RedisPool, caller: &'static str) {
+    // 3 multiplier is arbitrary (observational) - clusters typically have 2-3 replicas per node
+    let mut tasks = Vec::with_capacity(pool.clients().len() * 3);
+
+    for client in pool.clients() {
+        // `nodes()` maps each replica server to its primary.
+        for (_replica, primary) in client.replicas().nodes() {
+            let client = client.clone();
+            tasks.push(async move {
+                let options = Options {
+                    cluster_node: Some(primary),
+                    fail_fast: true,
+                    ..Default::default()
+                };
+
+                if let Err(err) = client
+                    .replicas()
+                    .with_options(&options)
+                    .ping::<()>(Some(REPLICA_HEARTBEAT_PING_MSG.to_string()))
+                    .await
+                {
+                    // Keep-alive is best-effort; log and move on. We don't record this as a query
+                    // error since it doesn't correspond to a user-facing cache operation.
+                    tracing::info!(caller = caller, error = ?err, "replica heartbeat ping failed");
+                }
+            })
+        }
+    }
+
+    join_all(tasks).await;
 }
 
 /// Sets up the error, reconnection, and unresponsive event listeners
@@ -1376,6 +1509,73 @@ mod test {
                 .abort_handle()
                 .expect("metrics not activated after recreation");
             assert!(!new_metrics.is_finished());
+            Ok(())
+        }
+
+        /// The replica keep-alive heartbeat should run only for clustered clients (which
+        /// establish replica connections) and be absent for standalone clients.
+        #[tokio::test]
+        #[rstest::rstest]
+        async fn replica_heartbeat_present_only_when_clustered(
+            #[values(true, false)] clustered: bool,
+        ) -> Result<(), BoxError> {
+            let _guard = lock_for_static().lock().await;
+            let storage = RedisCacheStorage::new(redis_config(clustered), "test").await?;
+            storage.create_client_pool().await?;
+
+            let guard = storage.inner.read();
+            let inner = guard.as_ref().unwrap();
+            if clustered {
+                let handle = inner
+                    .replica_heartbeat_abort_handle
+                    .as_ref()
+                    .expect("clustered pool should run a replica heartbeat");
+                assert!(!handle.is_finished());
+            } else {
+                assert!(
+                    inner.replica_heartbeat_abort_handle.is_none(),
+                    "standalone pool should not run a replica heartbeat"
+                );
+            }
+            Ok(())
+        }
+
+        /// After a pool recreation, a clustered pool should have a fresh, live replica heartbeat
+        /// and the old one should have been aborted along with the old pool.
+        #[tokio::test]
+        async fn recreation_restarts_replica_heartbeat() -> Result<(), BoxError> {
+            let _guard = lock_for_static().lock().await;
+            let storage = RedisCacheStorage::new(redis_config(true), "test").await?;
+            storage.create_client_pool().await?;
+
+            let old_replica_heartbeat = storage
+                .inner
+                .read()
+                .as_ref()
+                .unwrap()
+                .replica_heartbeat_abort_handle
+                .clone()
+                .expect("clustered pool should run a replica heartbeat");
+            assert!(!old_replica_heartbeat.is_finished());
+
+            storage.inner.write().take();
+            tokio::task::yield_now().await;
+            assert!(
+                old_replica_heartbeat.is_finished(),
+                "old replica heartbeat should be aborted when the pool is dropped"
+            );
+
+            let _ = storage.client().await;
+            wait_for_recreation(&storage).await;
+
+            let guard = storage.inner.read();
+            let new_replica_heartbeat = guard
+                .as_ref()
+                .unwrap()
+                .replica_heartbeat_abort_handle
+                .as_ref()
+                .expect("recreated clustered pool should run a replica heartbeat");
+            assert!(!new_replica_heartbeat.is_finished());
             Ok(())
         }
 

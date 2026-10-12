@@ -11,13 +11,13 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 (Node.js 24)
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.95.0"
+          toolchain: "1.97.1"
           components: rustfmt
 
       - uses: Swatinem/rust-cache@v2
@@ -31,13 +31,13 @@ jobs:
         run: cargo build --locked -p apollo-router --release
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 (Node.js 24)
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.95.0"
+          toolchain: "1.97.1"
           components: rustfmt
 
       - uses: Swatinem/rust-cache@v2
@@ -72,3 +72,12 @@ jobs:
       - name: HTTP factory tests
         if: ${{ !cancelled() }}
         run: cargo test --locked -p apollo-router --lib axum_http_server_factory
+
+      - name: Gateway compatibility tests
+        if: ${{ !cancelled() }}
+        run: |
+          cargo test --locked -p apollo-router --lib -- --list > /tmp/router-tests.txt
+          for suite in feature_gate_enforcement plugins::authentication plugins::authorization plugins::subscription file_uploads; do
+            grep -F "$suite" /tmp/router-tests.txt | grep -q ': test$'
+            cargo test --locked -p apollo-router --lib "$suite"
+          done

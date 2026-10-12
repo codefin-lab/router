@@ -16,19 +16,11 @@ expression: response
       }
     },
     {
-      "message": "Null value found for non-nullable type U",
+      "message": "Missing field",
       "path": [
         "t",
-        "u"
-      ],
-      "extensions": {
-        "code": "RESPONSE_VALIDATION_FAILED"
-      }
-    },
-    {
-      "message": "Null value found for non-nullable type T",
-      "path": [
-        "t"
+        "u",
+        "field"
       ],
       "extensions": {
         "code": "RESPONSE_VALIDATION_FAILED"
@@ -56,7 +48,7 @@ expression: response
               "operationKind": "query",
               "operationName": "Query_fetch_failure__Subgraph1__0",
               "outputRewrites": null,
-              "schemaAwareHash": "33127d70f901f74c5c3e0a8d54cc09574e9e9ea070a1986e8ccdefc3fabd7c75",
+              "schemaAwareHash": "3995d0a5fba840ea2c2917c25b1be1a0d36bd3f882d5ba15e7f951b2acd8bc2e",
               "serviceName": "Subgraph1",
               "variableUsages": []
             },
@@ -105,7 +97,7 @@ expression: response
                         "typeCondition": "U"
                       }
                     ],
-                    "schemaAwareHash": "c9a77e0dbd1a6600ed64b632761485f269586c09bf219bea869cde3feec07570",
+                    "schemaAwareHash": "13f32799da848fd7c60fa33258de5af192c1af9444df26e4732a72af1d667d08",
                     "serviceName": "Subgraph1",
                     "variableUsages": [
                       "contextualArgument_1_0"
@@ -148,7 +140,7 @@ expression: response
                         "typeCondition": "U"
                       }
                     ],
-                    "schemaAwareHash": "a7fb7bb5c32f9245353202a30e125bd1ceeb262cbe2d45d691d915edf0c850f5",
+                    "schemaAwareHash": "bdab4f1ebabb925bda9558d5efc88d50692f61ad225c9cd7a6fd3158dab1a6bb",
                     "serviceName": "Subgraph2",
                     "variableUsages": []
                   },
@@ -166,23 +158,10 @@ expression: response
     },
     "valueCompletion": [
       {
-        "message": "Null value found for non-nullable type Int",
+        "message": "Cannot return null for non-nullable type Int",
         "path": [
           "t",
           "u"
-        ]
-      },
-      {
-        "message": "Null value found for non-nullable type U",
-        "path": [
-          "t",
-          "u"
-        ]
-      },
-      {
-        "message": "Null value found for non-nullable type T",
-        "path": [
-          "t"
         ]
       }
     ]
