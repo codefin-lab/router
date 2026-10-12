@@ -28,7 +28,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Build
-        run: cargo build -p apollo-router --release
+        run: cargo build --locked -p apollo-router --release
 
   test:
     runs-on: ubuntu-latest
@@ -47,5 +47,23 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
-      - name: Test (license + state_machine)
-        run: cargo test -p apollo-router --lib license_enforcement state_machine
+      - name: Fork regression test discovery
+        run: |
+          cargo test --locked -p apollo-router --lib va017 -- --list > /tmp/va017-tests.txt
+          cat /tmp/va017-tests.txt
+          test "$(grep -c ': test$' /tmp/va017-tests.txt)" -ge 4
+
+      - name: Fork regression tests
+        run: cargo test --locked -p apollo-router --lib va017
+
+      - name: License report tests
+        if: ${{ !cancelled() }}
+        run: cargo test --locked -p apollo-router --lib license_enforcement
+
+      - name: State machine tests
+        if: ${{ !cancelled() }}
+        run: cargo test --locked -p apollo-router --lib state_machine
+
+      - name: HTTP factory tests
+        if: ${{ !cancelled() }}
+        run: cargo test --locked -p apollo-router --lib axum_http_server_factory
