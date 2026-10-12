@@ -77,7 +77,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           cargo test --locked -p apollo-router --lib -- --list > /tmp/router-tests.txt
-          for suite in feature_gate_enforcement plugins::authentication plugins::authorization plugins::subscription file_uploads; do
+          for suite in feature_gate_enforcement plugins::authentication plugins::authorization plugins::subscription file_uploads services::hickory_dns_connector services::http::service plugins::telemetry::reload; do
             grep -F "$suite" /tmp/router-tests.txt | grep -q ': test$'
             cargo test --locked -p apollo-router --lib "$suite"
           done

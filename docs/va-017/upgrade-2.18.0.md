@@ -144,3 +144,32 @@ this crate as unmaintained with no patched release. The dependency path is oci-c
 proc-macro-error2; a targeted lockfile update removes both proc-macro-error2
 and proc-macro-error-attr2 without changing other dependencies. CI must confirm
 compatibility and the absence of the warning. No lint suppression is used.
+
+## Rust security patch checkpoint
+
+Targeted Cargo.lock updates stay within the existing compatible release lines:
+
+| Package | Before | Candidate |
+| --- | --- | --- |
+| hickory-resolver / net / proto | 0.26.1 | 0.26.3 |
+| quinn-proto | 0.11.12 | 0.11.19 |
+| quinn-udp | 0.5.13 | 0.5.16 |
+| cmov | 0.5.3 | 0.5.4 |
+| rand | 0.8.5 / 0.9.2 | 0.8.6 / 0.9.3 |
+
+[Hickory 0.26.3](https://github.com/hickory-dns/hickory-dns/releases/tag/v0.26.3)
+includes fixes for regressions in the minimum security release 0.26.2.
+[Quinn 0.11.19](https://github.com/quinn-rs/quinn/releases/tag/quinn-proto-0.11.19)
+also fixes subsequent stream-limit and Retry-token advisories. Supporting resolver
+patches and rand_pcg are resolved by Cargo; no broad update was run.
+CI additionally exercises DNS connector error mapping, HTTP client behavior and
+telemetry reload configuration. A new source scan and both native image builds
+must confirm this candidate; previous scan counts are not current acceptance.
+
+OpenTelemetry SDK 0.31 has a Medium W3C baggage finding whose reported fix is
+0.32.1. The Router uses a coupled 0.31 SDK/exporter ecosystem; do not replace
+only the SDK with an incompatible 0.32 type graph. Baggage propagation is wired
+in reload/tracing.rs when enabled. This remains unresolved pending coordinated
+migration or a reviewed backport; do not claim non-applicability without consumer
+configuration evidence. Legacy rand 0.7 also remains pending parent dependency
+migration; no compatible 0.7 security patch is reported. No exception is approved.
