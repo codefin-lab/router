@@ -426,6 +426,26 @@ fn add_enum_value_to_map(
     }
 }
 
+/// Wraps a `&Object` so a `HashSet` deduplicates by the object's address rather
+/// than its (deep) contents. `Object`'s own `Hash`/`Eq` recurse over the whole
+/// subtree, so keying visited fragments on `&Object` would deep-hash the response
+/// on every fragment spread (the regression this guards against). Keying on the
+/// address is `O(1)`, and the `'a` lifetime ties every key to the borrowed
+/// response tree, so the borrow checker guarantees no key outlives its referent.
+struct ByAddress<'a>(&'a Object);
+
+impl PartialEq for ByAddress<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.0, other.0)
+    }
+}
+impl Eq for ByAddress<'_> {}
+impl std::hash::Hash for ByAddress<'_> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::ptr::hash(self.0, state);
+    }
+}
+
 fn extract_enums_from_selection_set(
     selection_set: &[SpecSelection],
     fragments: &Fragments,
@@ -433,55 +453,49 @@ fn extract_enums_from_selection_set(
     selection_response: &Object,
     result_set: &mut ReferencedEnums,
 ) {
-    for selection in selection_set.iter() {
-        match selection {
-            SpecSelection::Field {
-                name,
-                alias,
-                field_type,
-                selection_set,
-                ..
-            } => {
-                let field_name = alias.as_ref().unwrap_or(name).as_str();
-                if let Some(field_value) = selection_response.get(field_name) {
-                    let field_type_def = schema.types.get(field_type.0.inner_named_type());
+    let mut stack: Vec<(&[SpecSelection], &Object)> = vec![(selection_set, selection_response)];
+    // Deduplicate visited fragments by the response object's address, not its
+    // contents. `Object`'s `Hash`/`Eq` recurse over the whole subtree, so keying on
+    // `&Object` would deep-hash the response on every fragment spread and make
+    // extraction cost grow with response size. `ByAddress` keys on the address
+    // (`O(1)`); its `'a` lifetime keeps every key tied to the borrowed response tree.
+    let mut visited_fragments: HashSet<(&str, ByAddress<'_>)> = HashSet::new();
 
-                    // If the value is an enum, we want to add all values to the map
-                    if let Some(ExtendedType::Enum(enum_type)) = field_type_def {
-                        add_enum_value_to_map(&enum_type.name, field_value, result_set);
-                    }
-                    // Otherwise if the response value is an object, add any enums from the field's selection set
-                    else if let JsonValue::Object(value_object) = field_value
-                        && let Some(selection_set) = selection_set
-                    {
-                        extract_enums_from_selection_set(
-                            selection_set,
-                            fragments,
-                            schema,
-                            value_object,
-                            result_set,
-                        );
+    while let Some((selections, response)) = stack.pop() {
+        for selection in selections.iter() {
+            match selection {
+                SpecSelection::Field {
+                    name,
+                    alias,
+                    field_type,
+                    selection_set,
+                    ..
+                } => {
+                    let field_name = alias.as_ref().unwrap_or(name).as_str();
+                    if let Some(field_value) = response.get(field_name) {
+                        let field_type_def = schema.types.get(field_type.0.inner_named_type());
+                        // If the value is an enum, we want to add all values to the map
+                        if let Some(ExtendedType::Enum(enum_type)) = field_type_def {
+                            add_enum_value_to_map(&enum_type.name, field_value, result_set);
+                        }
+                        // Otherwise if the response value is an object, add any enums from the field's selection set
+                        else if let JsonValue::Object(value_object) = field_value
+                            && let Some(selection_set) = selection_set
+                        {
+                            stack.push((selection_set, value_object));
+                        }
                     }
                 }
-            }
-            SpecSelection::InlineFragment { selection_set, .. } => {
-                extract_enums_from_selection_set(
-                    selection_set,
-                    fragments,
-                    schema,
-                    selection_response,
-                    result_set,
-                );
-            }
-            SpecSelection::FragmentSpread { name, .. } => {
-                if let Some(fragment) = fragments.get(name) {
-                    extract_enums_from_selection_set(
-                        &fragment.selection_set,
-                        fragments,
-                        schema,
-                        selection_response,
-                        result_set,
-                    );
+                SpecSelection::InlineFragment { selection_set, .. } => {
+                    stack.push((selection_set, response));
+                }
+                SpecSelection::FragmentSpread { name, .. } => {
+                    let key = (name.as_str(), ByAddress(response));
+                    if visited_fragments.insert(key)
+                        && let Some(fragment) = fragments.get(name)
+                    {
+                        stack.push((&fragment.selection_set, response));
+                    }
                 }
             }
         }
@@ -1167,8 +1181,7 @@ fn format_fragment(
     write!(
         f,
         "fragment {} on {}",
-        &fragment.name.to_string(),
-        &fragment.selection_set.ty.to_string()
+        fragment.name, fragment.selection_set.ty
     )?;
     format_directives(&fragment.directives, true, normalization_algorithm, f)?;
     format_selection_set(&fragment.selection_set, normalization_algorithm, f)

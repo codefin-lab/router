@@ -30,6 +30,8 @@ use crate::connectors::expand::visitors::GroupVisitor;
 use crate::connectors::id::ConnectedElement;
 use crate::connectors::json_selection::NamedSelection;
 use crate::connectors::json_selection::Ranged;
+use crate::connectors::json_selection::SelectionAnalysis;
+use crate::connectors::json_selection::SelectionTrie;
 use crate::connectors::json_selection::VarPaths;
 use crate::connectors::schema_type_ref::SchemaTypeRef;
 use crate::connectors::spec::connect::CONNECT_SELECTION_ARGUMENT_NAME;
@@ -197,9 +199,10 @@ impl<'schema> Selection<'schema> {
 
                 for concrete_type_ref in concrete_type_refs {
                     // Use the new shape-based walk method for each concrete type
-                    match validator.walk_selection_with_shape(concrete_type_ref, &shape) {
-                        Ok(mut fields) => all_resolved_fields.append(&mut fields),
-                        Err(err) => return Err(err),
+                    {
+                        let mut fields =
+                            validator.walk_selection_with_shape(concrete_type_ref, &shape)?;
+                        all_resolved_fields.append(&mut fields)
                     }
                 }
 
@@ -243,6 +246,93 @@ impl<'schema> Selection<'schema> {
         self.parsed
             .variable_references()
             .map(|var_ref| var_ref.namespace.namespace)
+    }
+
+    /// Diagnose a *requestless* `@connect` directive — one that specifies no
+    /// transport (`http:` is absent; no other transport argument exists yet) —
+    /// whose `selection` nevertheless reads request-phase data: the response
+    /// body (the implicit `$root`), the response status (`$status`), or the
+    /// response headers (`$response`). Without a transport, none of those are
+    /// bound at runtime: the response body is synthesized as the empty object
+    /// `{}` and `$status` / `$response` are never populated, so the offending
+    /// paths would silently produce `null`.
+    ///
+    /// The wording is transport-agnostic on purpose. `$root` is the implicit
+    /// "the data the transport returned," not "the HTTP response body" — when
+    /// a future `sql:` (or other) transport joins `http:`, the same code keeps
+    /// describing the same condition without needing a parallel HTTP-specific
+    /// variant. The error message says "transport" rather than "HTTP" for the
+    /// same reason.
+    ///
+    /// `$request` is intentionally absent from the disallowed list: it refers
+    /// to the router's incoming GraphQL request, not to anything the connector
+    /// itself fetched. `handle_mapping_only_response` in `runtime::responses`
+    /// threads `client_headers` through to `$request` regardless of whether
+    /// the connector performs a transport call.
+    pub(super) fn validate_requestless_consumption(&self, schema: &SchemaInfo) -> Vec<Message> {
+        // Cloning is acceptable here: this runs once per `@connect` directive
+        // during validation, not on any hot path, and the analysis machinery
+        // is designed to be cheap after a one-shot wrap.
+        let analysis = SelectionAnalysis::new(self.parsed.clone());
+        let consumption = analysis.consumption();
+
+        // Each entry is (namespace, human-readable description of the
+        // request-phase data it exposes). Order is deterministic so the
+        // resulting error list is stable across runs.
+        const REQUEST_PHASE_NAMESPACES: &[(&str, &str)] = &[
+            ("$root", "the response body"),
+            ("$status", "the response status"),
+            ("$response", "the response headers"),
+        ];
+
+        let mut messages = Vec::new();
+        for (namespace, description) in REQUEST_PHASE_NAMESPACES {
+            let Some(sub) = consumption.get(*namespace) else {
+                continue;
+            };
+            if sub.is_empty() && !sub.is_leaf() {
+                // Subtree was navigated through but nothing terminal was
+                // recorded — defensive guard; the analysis should not produce
+                // such empty-non-leaf entries at the top level.
+                continue;
+            }
+
+            // Collect every source range the analysis attributed to this
+            // namespace. `$root` is implicit (no `$root` token in source), so
+            // we always include descendant ranges to give the error a place
+            // to point at. The other namespaces appear textually, so their
+            // own `key_ranges` typically yield the variable-name range.
+            let mut ranges: Vec<Range<usize>> = consumption.key_ranges(namespace).collect();
+            collect_descendant_ranges(sub, &mut ranges);
+
+            let locations: Vec<_> = ranges
+                .into_iter()
+                .flat_map(|range| subslice_location(&self.node, range, schema))
+                .collect();
+
+            // Render the consumed subtree under the namespace so the error
+            // shows precisely *which* paths drove the diagnostic. For a bare
+            // reference (`$status` with no children) the subtree is an empty
+            // leaf; in that case the namespace name alone is the detail.
+            let details = if sub.is_empty() {
+                namespace.to_string()
+            } else {
+                format!("{namespace} {{ {sub} }}")
+            };
+
+            messages.push(Message {
+                code: Code::RequestlessSelectionUsesRequestData,
+                message: format!(
+                    "{coordinate}: selection consumes `{namespace}` \
+                     ({description}) but the directive has no transport \
+                     (no `http:`)\n\
+                     Details: {details}",
+                    coordinate = self.coordinate,
+                ),
+                locations,
+            });
+        }
+        messages
     }
 
     /// Legacy visitor-based type checking for v0.1/v0.2 (frozen, will be removed)
@@ -325,6 +415,20 @@ impl<'schema> Selection<'schema> {
                 .map(|validator| validator.seen_fields)
             }
         }
+    }
+}
+
+/// Collect the source-byte ranges of every key reachable from `trie`,
+/// including its own top-level keys and all descendants. Used by
+/// [`Selection::validate_requestless_consumption`] to give the diagnostic a
+/// place to point at when the offending namespace (e.g. `$root`) does not
+/// appear textually in the selection but its consumed subpaths do.
+fn collect_descendant_ranges(trie: &SelectionTrie, out: &mut Vec<Range<usize>>) {
+    for key in trie.keys() {
+        out.extend(trie.key_ranges(key));
+    }
+    for (_, sub) in trie.iter() {
+        collect_descendant_ranges(sub, out);
     }
 }
 
@@ -420,7 +524,7 @@ impl<'schema> SelectionValidator<'schema> {
                     code: Code::CircularReference,
                     message: format!(
                         "Circular reference detected in {coordinate}: type `{type_name}` appears more than once in `{selection_path}`. For more information, see https://go.apollo.dev/connectors/limitations#circular-references",
-                        coordinate = &self.coordinate,
+                        coordinate = self.coordinate,
                         selection_path = self
                             .path_with_root()
                             .map(|part| match part {
@@ -471,6 +575,28 @@ impl<'schema> SelectionValidator<'schema> {
 
     fn path_with_root(&self) -> impl Iterator<Item = PathPart<'_>> {
         once(self.root).chain(self.path.iter().copied())
+    }
+
+    /// Whether a selected field's value shape implies a group selection
+    /// (`field { ... }`), which requires the field's GraphQL type to be an object.
+    ///
+    /// An `Object` shape is a group selection. An `Array` shape is a group
+    /// selection only when its element shape is itself a group — i.e. a list of
+    /// objects. A list of scalars (for example `data: data->map(@->map(@->toString))`
+    /// over a `[[String]]` field) is a scalar projection, not a group selection,
+    /// so it must not require an object type.
+    fn shape_implies_group_selection(shape: &Shape) -> bool {
+        match shape.case() {
+            ShapeCase::Object { .. } => true,
+            ShapeCase::Array { prefix, tail } => {
+                prefix.iter().any(Self::shape_implies_group_selection)
+                    || Self::shape_implies_group_selection(tail)
+            }
+            ShapeCase::One(shapes) => shapes.iter().any(Self::shape_implies_group_selection),
+            ShapeCase::All(shapes) => shapes.iter().any(Self::shape_implies_group_selection),
+            // `ShapeCase::Name` is a placeholder; scalars/leaves are not groups.
+            _ => false,
+        }
     }
 
     fn walk_selection_with_shape(
@@ -533,7 +659,7 @@ impl<'schema> SelectionValidator<'schema> {
                                 code: Code::ConnectorsFieldWithArguments,
                                 message: format!(
                                     "{coordinate} selects field `{parent_type}.{field_name}`, which has arguments. Only fields with a connector can have arguments.",
-                                    coordinate = &self.coordinate,
+                                    coordinate = self.coordinate,
                                     parent_type = type_ref.name(),
                                     field_name = field_name,
                                 ),
@@ -545,13 +671,10 @@ impl<'schema> SelectionValidator<'schema> {
                         self.seen_fields
                             .push((type_ref.name().clone(), field_def.name.clone()));
 
-                        // Check if this field has subselections (group selection)
-                        // Object/Array shapes correspond to GraphQL object/list types with subselections
-                        let has_subselection = match field_shape.case() {
-                            ShapeCase::Object { .. } => true,
-                            ShapeCase::Array { .. } => true,
-                            _ => false, // ShapeCase::Name is a placeholder, don't assume subselections
-                        };
+                        // Check if this field has subselections (group selection).
+                        // An object shape (or a list of objects) is a group selection; a
+                        // list of scalars is a scalar projection, not a group selection.
+                        let has_subselection = Self::shape_implies_group_selection(field_shape);
 
                         if let Some(field_type_ref) =
                             SchemaTypeRef::new(self.schema, inner_type_name)
@@ -561,8 +684,48 @@ impl<'schema> SelectionValidator<'schema> {
                                     // Valid: object field with subselection
                                     self.walk_selection_with_shape(field_type_ref, field_shape)?;
                                 }
+                                (ExtendedType::Union(union_type), true) => {
+                                    // Expand union to concrete member types and
+                                    // validate against each, mirroring the top-level
+                                    // expansion in type_check_shape_based.
+                                    let concrete_refs: Vec<_> = union_type
+                                        .members
+                                        .iter()
+                                        .filter_map(|member_name| {
+                                            SchemaTypeRef::new(self.schema, member_name)
+                                        })
+                                        .collect();
+                                    for concrete_ref in concrete_refs {
+                                        self.walk_selection_with_shape(concrete_ref, field_shape)?;
+                                    }
+                                }
+                                (ExtendedType::Interface(interface_type), true) => {
+                                    // Expand interface to concrete implementing
+                                    // types and validate against each.
+                                    let concrete_refs: Vec<_> = self
+                                        .schema
+                                        .types
+                                        .values()
+                                        .filter_map(|t| {
+                                            if let ExtendedType::Object(o) = t {
+                                                if o.implements_interfaces
+                                                    .contains(&interface_type.name)
+                                                {
+                                                    SchemaTypeRef::new(self.schema, &o.name)
+                                                } else {
+                                                    None
+                                                }
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect();
+                                    for concrete_ref in concrete_refs {
+                                        self.walk_selection_with_shape(concrete_ref, field_shape)?;
+                                    }
+                                }
                                 (_, true) => {
-                                    // Invalid: non-object field with subselection (group selection)
+                                    // Invalid: non-composite field with subselection (group selection)
                                     return Err(Message {
                                         code: Code::GroupSelectionIsNotObject,
                                         message: format!(
@@ -622,7 +785,57 @@ impl<'schema> SelectionValidator<'schema> {
                     })
                 }
             }
-            _ => Ok(Vec::new()), // Handle other shape cases
+            ShapeCase::Array { prefix, tail } => {
+                // A list-valued shape — e.g. produced by methods with statically known
+                // list outputs like `->entries` — validates each item shape against the
+                // same type: the caller already unwrapped GraphQL list types to their
+                // inner named type via `inner_named_type()`. Without this arm, fields
+                // selected beneath such methods were never marked as seen, producing
+                // spurious CONNECTORS_UNRESOLVED_FIELD errors (e.g. `->entries { key value }`
+                // against `[FooEntry]` left `FooEntry.key`/`FooEntry.value` unresolved).
+                let mut all_seen_fields = Vec::new();
+                for item_shape in prefix {
+                    all_seen_fields.extend(self.walk_selection_with_shape(type_ref, item_shape)?);
+                }
+                if !tail.is_none() {
+                    all_seen_fields.extend(self.walk_selection_with_shape(type_ref, tail)?);
+                }
+                Ok(all_seen_fields)
+            }
+            ShapeCase::All(shapes) => {
+                // An intersection shape (e.g. `IntfA & IntfB`, or merged records):
+                // the value simultaneously satisfies every member, so the selected
+                // fields are the union across members and each must validate against
+                // `type_ref`. Walk every member and accumulate, propagating errors —
+                // unlike `One` (a union of alternatives), an intersection member that
+                // fails to validate is a genuine error, not a discarded branch.
+                let mut all_seen_fields = Vec::new();
+                for member_shape in shapes.iter() {
+                    all_seen_fields.extend(self.walk_selection_with_shape(type_ref, member_shape)?);
+                }
+                Ok(all_seen_fields)
+            }
+            // Structureless shapes expose no selectable GraphQL fields, so they
+            // contribute nothing to `seen_fields`. These are listed explicitly,
+            // rather than behind a `_` catch-all, so that introducing a new
+            // `ShapeCase` variant becomes a compile error here — forcing a
+            // deliberate decision instead of silently dropping fields (the root
+            // cause of the `->entries` bug the `Array` arm above fixes).
+            ShapeCase::Bool(_)
+            | ShapeCase::String(_)
+            | ShapeCase::Int(_)
+            | ShapeCase::Float
+            | ShapeCase::Null
+            | ShapeCase::None => Ok(Vec::new()),
+            // Opaque / deferred shapes whose structure is not statically known
+            // here. We preserve the existing behavior of contributing nothing;
+            // crucially we do NOT treat them as resolving every field, which could
+            // mask genuine `CONNECTORS_UNRESOLVED_FIELD` errors. A structure-aware
+            // policy for these is left to a follow-up.
+            ShapeCase::Name(_, _) | ShapeCase::Unknown => Ok(Vec::new()),
+            // A shape-processing failure is surfaced through other diagnostics;
+            // there is nothing to credit as seen here.
+            ShapeCase::Error(_) => Ok(Vec::new()),
         }
     }
 }
@@ -683,7 +896,7 @@ impl<'schema> LegacySelectionValidator<'schema> {
                     code: Code::CircularReference,
                     message: format!(
                         "Circular reference detected in {coordinate}: type `{new_object_name}` appears more than once in `{selection_path}`. For more information, see https://go.apollo.dev/connectors/limitations#circular-references",
-                        coordinate = &self.coordinate,
+                        coordinate = self.coordinate,
                         selection_path = self.path_string(field.definition),
                         new_object_name = object.name,
                     ),
@@ -830,7 +1043,7 @@ impl<'schema> GroupVisitor<LegacyGroup<'schema>, LegacyField<'schema>>
                         code: Code::SelectedFieldNotFound,
                         message: format!(
                             "{coordinate} contains field `{field_name}`, which does not exist on `{parent_type}`.",
-                            coordinate = &self.coordinate,
+                            coordinate = self.coordinate,
                             parent_type = group.ty.name,
                         ),
                         locations: self.get_selection_location(selection).collect(),

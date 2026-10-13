@@ -7,7 +7,6 @@ use std::fmt::Display;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use axum::Router;
@@ -58,6 +57,7 @@ use crate::graphql;
 use crate::http_server_factory::HttpServerFactory;
 use crate::http_server_factory::HttpServerHandle;
 use crate::http_server_factory::Listener;
+use crate::metrics::FutureMetricsExt;
 use crate::plugins::telemetry::SpanMode;
 use crate::plugins::telemetry::config_new::router::instruments::ResponseBodySizeRecording;
 use crate::plugins::telemetry::config_new::router::instruments::ResponseBodySizeRecordingStream;
@@ -65,8 +65,6 @@ use crate::router::ApolloRouterError;
 use crate::router_factory::Endpoint;
 use crate::router_factory::RouterFactory;
 use crate::services::router;
-use crate::uplink::license_enforcement::APOLLO_ROUTER_LICENSE_EXPIRED;
-use crate::uplink::license_enforcement::LICENSE_EXPIRED_SHORT_MESSAGE;
 use crate::uplink::license_enforcement::LicenseState;
 
 static BARE_WILDCARD_PATH_REGEX: Lazy<Regex> = Lazy::new(|| {
@@ -215,6 +213,7 @@ impl HttpServerFactory for AxumHttpServerFactory {
                 .local_addr()
                 .map_err(ApolloRouterError::ServerCreationError)?;
 
+            let sm = span_mode(&configuration);
             let (main_server, main_shutdown_sender) = serve_router_on_listen_addr(
                 all_routers.main.1,
                 pipeline_ref.clone(),
@@ -222,12 +221,20 @@ impl HttpServerFactory for AxumHttpServerFactory {
                 main_listener,
                 configuration.clone(),
                 all_connections_stopped_sender.clone(),
+                sm,
             );
 
             tracing::info!(
                 "GraphQL endpoint exposed at {}{} 🚀",
                 actual_main_listen_address,
                 configuration.supergraph.path
+            );
+
+            tracing::warn!(
+                "The `apollo.router.session.count.active` metric is deprecated and may be \
+                 removed in a future release. Switch to the OpenTelemetry-compliant \
+                 `http.server.active_requests` metric instead. See \
+                 https://www.apollographql.com/docs/graphos/routing/observability/router-telemetry-otel/enabling-telemetry/standard-instruments#session"
             );
 
             // serve extra routers
@@ -262,6 +269,7 @@ impl HttpServerFactory for AxumHttpServerFactory {
                             listener,
                             configuration.clone(),
                             all_connections_stopped_sender.clone(),
+                            sm,
                         );
                         (
                             server.map(|listener| (listen_addr, listener)),
@@ -301,12 +309,12 @@ impl HttpServerFactory for AxumHttpServerFactory {
             });
 
             // Spawn the main (GraphQL) server into a task
-            let main_future = tokio::task::spawn(main_server)
+            let main_future = tokio::task::spawn(main_server.with_current_meter_provider())
                 .map_err(|_| ApolloRouterError::HttpServerLifecycleError)
                 .boxed();
 
             // Spawn all other servers (health, metrics, etc...) into a task
-            let extra_futures = tokio::task::spawn(join_all(servers))
+            let extra_futures = tokio::task::spawn(join_all(servers).with_current_meter_provider())
                 .map_err(|_| ApolloRouterError::HttpServerLifecycleError)
                 .boxed();
 
@@ -469,7 +477,7 @@ async fn handle_graphql<RF: RouterFactory>(
 ) -> impl IntoResponse {
     let _guard = i64_up_down_counter_with_unit!(
         "apollo.router.session.count.active",
-        "Amount of in-flight sessions",
+        "Amount of in-flight sessions (deprecated, use `http.server.active_requests` instead)",
         "{session}",
         1
     );
@@ -717,9 +725,15 @@ mod tests {
         assert_eq!(mode, SpanMode::Deprecated);
     }
 
-    // Perform a short wait, (100ns) which is intended to complete before the http router call. If
-    // it does complete first, then the http router call will be cancelled and we'll see an error
-    // log in our assert.
+    // Drive the http router call into its cancellation-handling path (where `CancelHandler`
+    // is constructed) and then deterministically cancel it before completion. With
+    // `experimental_log_on_broken_pipe = true`, dropping `CancelHandler` without an
+    // intervening `on_response` is what emits the "broken pipe" error log asserted on below.
+    //
+    // Historical note: this used to race a `Duration::from_nanos(100)` timeout against the
+    // call. Whether the future was polled even once before the timeout fired was a function
+    // of scheduler timing, not test logic, so the assertion was inherently flaky. See
+    // `flaky-test-fixes.md` (nanosecond-timeout-race anti-pattern).
     #[tokio::test(flavor = "multi_thread")]
     async fn request_cancel_log() {
         let mut http_router = crate::TestHarness::builder()
@@ -731,21 +745,7 @@ mod tests {
             .unwrap();
 
         async {
-            let _res = tokio::time::timeout(
-                std::time::Duration::from_nanos(100),
-                http_router.call(
-                    http::Request::builder()
-                        .method("POST")
-                        .uri("/")
-                        .header(ACCEPT, "application/json")
-                        .header(CONTENT_TYPE, "application/json")
-                        .body(router::body::from_bytes(
-                            r#"{"query":"query { me { name }}"}"#,
-                        ))
-                        .unwrap(),
-                ),
-            )
-            .await;
+            cancel_after_first_poll(&mut http_router).await;
         }
         .with_subscriber(assert_snapshot_subscriber!(
             tracing_core::LevelFilter::ERROR
@@ -753,9 +753,8 @@ mod tests {
         .await
     }
 
-    // Perform a short wait, (100ns) which is intended to complete before the http router call. If
-    // it does complete first, then the http router call will be cancelled and we'll not see an
-    // error log in our assert.
+    // Same shape as `request_cancel_log`, but with `experimental_log_on_broken_pipe = false`,
+    // so the snapshot asserts that no error log is emitted on cancellation.
     #[tokio::test(flavor = "multi_thread")]
     async fn request_cancel_no_log() {
         let mut http_router = crate::TestHarness::builder()
@@ -767,25 +766,54 @@ mod tests {
             .unwrap();
 
         async {
-            let _res = tokio::time::timeout(
-                std::time::Duration::from_nanos(100),
-                http_router.call(
-                    http::Request::builder()
-                        .method("POST")
-                        .uri("/")
-                        .header(ACCEPT, "application/json")
-                        .header(CONTENT_TYPE, "application/json")
-                        .body(router::body::from_bytes(
-                            r#"{"query":"query { me { name }}"}"#,
-                        ))
-                        .unwrap(),
-                ),
-            )
-            .await;
+            cancel_after_first_poll(&mut http_router).await;
         }
         .with_subscriber(assert_snapshot_subscriber!(
             tracing_core::LevelFilter::ERROR
         ))
         .await
+    }
+
+    // Drive `http_router.call(...)` to its first `Pending` (which is what constructs the
+    // request's `CancelHandler` inside the production code path) and then drop the future to
+    // cancel it. Using `futures::poll!` instead of a `tokio::time::timeout` race makes
+    // "polled then cancelled" deterministic regardless of scheduler timing.
+    //
+    // The phase doc sketched a `tokio::sync::oneshot` + `tokio::select!` cancellation, which
+    // is the same shape any caller would use to cancel a real request; this helper is the
+    // synchronous-equivalent collapsed into a test-only single-task form because we don't
+    // need to `tokio::spawn` to observe cancellation here.
+    async fn cancel_after_first_poll(http_router: &mut crate::test_harness::HttpService) {
+        use std::task::Poll;
+
+        let request = http::Request::builder()
+            .method("POST")
+            .uri("/")
+            .header(ACCEPT, "application/json")
+            .header(CONTENT_TYPE, "application/json")
+            .body(router::body::from_bytes(
+                r#"{"query":"query { me { name }}"}"#,
+            ))
+            .unwrap();
+
+        // `HttpService::call` already returns a `Pin<Box<dyn Future + Send>>`, so we can
+        // poll it via `.as_mut()` and explicitly drop it without `tokio::pin!` (which would
+        // shadow the binding with a `Pin<&mut _>` and make the subsequent `drop` a no-op
+        // on the underlying boxed future).
+        let mut call_fut = http_router.call(request);
+
+        // First poll drives the router synchronously through `CancelHandler::new` into the
+        // inner `tokio::task::spawn(task).await`, which returns `Pending`. After this point
+        // dropping the future will run `CancelHandler::Drop` with
+        // `got_first_response == false`.
+        let first = futures::poll!(call_fut.as_mut());
+        assert!(
+            matches!(first, Poll::Pending),
+            "expected first poll of the router call to be Pending so the request enters \
+             the cancellation-handling path; got {:?}",
+            first
+        );
+
+        drop(call_fut);
     }
 }

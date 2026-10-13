@@ -285,7 +285,10 @@ pub enum CompositionError {
         locations: Locations,
     },
     #[error("{message}")]
-    InterfaceFieldNoImplem { message: String },
+    InterfaceFieldNoImplem {
+        message: String,
+        locations: Locations,
+    },
 }
 
 impl CompositionError {
@@ -479,8 +482,9 @@ impl CompositionError {
                     locations,
                 }
             }
-            Self::InterfaceFieldNoImplem { message } => Self::InterfaceFieldNoImplem {
+            Self::InterfaceFieldNoImplem { message, locations } => Self::InterfaceFieldNoImplem {
                 message: format!("{message}{appendix}"),
+                locations,
             },
             // Remaining errors do not have an obvious way to appending a message, so we just return self.
             Self::SubgraphError { .. }
@@ -533,7 +537,8 @@ impl CompositionError {
             | Self::InvalidFieldSharing { locations, .. }
             | Self::MergeError { locations, .. }
             | Self::ArgumentDefaultMismatch { locations, .. }
-            | Self::InputFieldDefaultMismatch { locations, .. } => locations,
+            | Self::InputFieldDefaultMismatch { locations, .. }
+            | Self::InterfaceFieldNoImplem { locations, .. } => locations,
             _ => &[],
         }
     }
@@ -862,6 +867,8 @@ pub enum SingleFederationError {
     InterfaceKeyMissingImplementationType { message: String },
     #[error("@defer is not supported on subscriptions")]
     DeferredSubscriptionUnsupported,
+    #[error("Duplicate @defer label {label:?}: labels must be unique within an operation")]
+    DuplicateDeferLabel { label: String },
     #[error("{message}")]
     QueryPlanComplexityExceeded { message: String },
     #[error("the caller requested cancellation")]
@@ -1107,6 +1114,7 @@ impl SingleFederationError {
                 ErrorCode::InterfaceKeyMissingImplementationType
             }
             SingleFederationError::DeferredSubscriptionUnsupported => ErrorCode::Internal,
+            SingleFederationError::DuplicateDeferLabel { .. } => ErrorCode::InvalidGraphQL,
             SingleFederationError::QueryPlanComplexityExceeded { .. } => {
                 ErrorCode::QueryPlanComplexityExceededError
             }

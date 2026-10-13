@@ -7,14 +7,13 @@ use apollo_compiler::executable::FieldSet;
 use apollo_compiler::executable::Name;
 use itertools::Itertools;
 
+use super::compare_response_shapes_in_supergraph;
 use super::query_plan_analysis::AnalysisContext;
 use super::response_shape::Clause;
 use super::response_shape::PossibleDefinitions;
 use super::response_shape::ResponseShape;
 use super::response_shape::compute_response_shape_for_selection_set;
 use super::response_shape_compare::compare_representative_field;
-use super::response_shape_compare::compare_response_shapes_with_constraint;
-use super::subgraph_constraint::SubgraphConstraint;
 use crate::FederationError;
 use crate::bail;
 use crate::internal_error;
@@ -189,7 +188,7 @@ fn get_field_definition(
     field_name: &Name,
 ) -> Result<Node<ast::FieldDefinition>, FederationError> {
     let parent_type_pos: CompositeTypeDefinitionPosition =
-        schema.get_type(parent_type.clone())?.try_into()?;
+        schema.get_type(parent_type)?.try_into()?;
     let field_def_pos = parent_type_pos.field(field_name.clone())?;
     field_def_pos
         .get(schema.schema())
@@ -276,11 +275,10 @@ fn key_directive_matches(
         .into());
     }
     let final_require_shape = condition.add_boolean_conditions(boolean_clause);
-    let path_constraint = SubgraphConstraint::at_root(context.subgraphs_by_name());
-    let assumption = Clause::default(); // empty assumption at the top level
-    compare_response_shapes_with_constraint(
-        &path_constraint,
-        &assumption,
+    // Note: The response shapes here start at the entity type, not at the query root type.
+    compare_response_shapes_in_supergraph(
+        context.supergraph_schema(),
+        context.subgraphs_by_name(),
         &final_require_shape,
         state,
     )
@@ -313,7 +311,7 @@ fn check_require(
     entity_require: &requires_selection::Selection,
 ) -> Result<(), AnalysisError> {
     let subgraph_entity_type_name = entity_response_shape.default_type_condition();
-    let subgraph_entity_type_pos = subgraph_schema.get_type(subgraph_entity_type_name.clone())?;
+    let subgraph_entity_type_pos = subgraph_schema.get_type(subgraph_entity_type_name)?;
     let directives = match &subgraph_entity_type_pos {
         TypeDefinitionPosition::Object(type_pos) => {
             let type_def = type_pos

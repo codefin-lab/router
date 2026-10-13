@@ -51,7 +51,21 @@ enum Action {
         path: String,
         level: String,
         log: String,
+        #[serde(default)]
+        condition: LogCondition,
     },
+}
+
+/// Filter applied to values selected by the JSONPath in a `Log` action.
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+enum LogCondition {
+    /// Log when the path returns any results (default).
+    #[default]
+    NonEmpty,
+    /// Only log when at least one matched value is a plain string.
+    /// Used to detect deprecated untagged-string selector variants (e.g. `Static(String)`).
+    IsString,
 }
 
 const REMOVAL_VALUE: &str = "__PLEASE_DELETE_ME";
@@ -105,14 +119,32 @@ pub(crate) fn upgrade_configuration(
         // Get ready for the next migration
         config = new_config;
     }
+
+    // Custom migration: wrap headers operation lists under an `operations` key.
+    // Handled in Rust rather than a proteus YAML action because the source path
+    // is a prefix of the destination path and subgraph names are dynamic.
+    let migrated = migrate_headers_operations(config.clone());
+    if migrated != config {
+        if log_warnings {
+            tracing::warn!(
+                "`headers.all.request`, per-subgraph equivalents, and \
+                 `headers.connector.{{all,sources.*}}.request` now require an `operations` key \
+                 wrapping the list of propagation rules. The router has applied this change \
+                 automatically. Please update your configuration file."
+            );
+        }
+        config = migrated;
+    }
+
     if !effective_migrations.is_empty() && log_warnings {
+        let descriptions: Vec<String> = effective_migrations
+            .iter()
+            .enumerate()
+            .map(|(idx, m)| format!("  {}. {}", idx + 1, m.description))
+            .collect();
         tracing::error!(
             "router configuration contains unsupported options and needs to be upgraded to run the router: \n\n{}\n\n",
-            effective_migrations
-                .iter()
-                .enumerate()
-                .map(|(idx, m)| format!("  {}. {}", idx + 1, m.description))
-                .join("\n\n")
+            descriptions.join("\n\n")
         );
     }
     Ok(config)
@@ -168,21 +200,32 @@ fn apply_migration(config: &Value, migration: &Migration) -> Result<Value, Confi
                 }
             }
             Action::Change { path, from, to } => {
-                if !jsonpath_lib::select(config, &format!("$[?(@.{path} == {from})]"))
+                // Select the value at `path` and compare it here, rather than letting JSONPath do
+                // the comparison with a `$[?(@.a.b == x)]` filter. That filter form silently
+                // matches nothing once `path` is more than two segments deep, which made the
+                // whole action a no-op — no error, no warning, config left untouched.
+                if jsonpath_lib::select(config, &format!("$.{path}"))
                     .unwrap_or_default()
-                    .is_empty()
+                    .contains(&from)
                 {
                     transformer_builder = transformer_builder
                         .add_action(Parser::parse(&format!(r#"const({to})"#), path)?);
                 }
             }
-            Action::Log { path, level, log } => {
+            Action::Log {
+                path,
+                level,
+                log,
+                condition,
+            } => {
                 let level = Level::from_str(level).map_err(migration_failure_error)?;
 
-                if !jsonpath_lib::select(config, &format!("$.{path}"))
-                    .unwrap_or_default()
-                    .is_empty()
-                {
+                let values = jsonpath_lib::select(config, &format!("$.{path}")).unwrap_or_default();
+                let should_log = match condition {
+                    LogCondition::NonEmpty => !values.is_empty(),
+                    LogCondition::IsString => values.iter().any(|v| v.is_string()),
+                };
+                if should_log {
                     match level {
                         Level::INFO => tracing::info!("{log}"),
                         Level::ERROR => tracing::error!("{log}"),
@@ -284,6 +327,52 @@ fn cleanup(value: &mut Value) {
                 cleanup(value);
             }
         }
+    }
+}
+
+/// Migrate the headers plugin config from the old flat-list shape to the new wrapped shape.
+///
+/// Old: `headers.all.request: [list of operations]`
+/// New: `headers.all.request.operations: [list of operations]`
+///
+/// Can't be expressed as a proteus YAML action because the source path is a prefix of the
+/// destination path, and subgraph names are dynamic so they can't be addressed with static
+/// dot-notation paths.
+fn migrate_headers_operations(mut config: Value) -> Value {
+    let Some(headers) = config.get_mut("headers") else {
+        return config;
+    };
+
+    if let Some(all) = headers.get_mut("all") {
+        wrap_operations_if_array(all, "request");
+    }
+
+    if let Some(Value::Object(subgraphs)) = headers.get_mut("subgraphs") {
+        for sg in subgraphs.values_mut() {
+            wrap_operations_if_array(sg, "request");
+        }
+    }
+
+    // Connector header config has the same flat→wrapped shape change.
+    if let Some(connector) = headers.get_mut("connector") {
+        if let Some(all) = connector.get_mut("all") {
+            wrap_operations_if_array(all, "request");
+        }
+        if let Some(Value::Object(sources)) = connector.get_mut("sources") {
+            for src in sources.values_mut() {
+                wrap_operations_if_array(src, "request");
+            }
+        }
+    }
+
+    config
+}
+
+/// If `parent[key]` is an array, replace it with `{ "operations": <array> }`.
+fn wrap_operations_if_array(parent: &mut Value, key: &str) {
+    if matches!(parent.get(key), Some(Value::Array(_))) {
+        let arr = parent[key].take();
+        parent[key] = serde_json::json!({ "operations": arr });
     }
 }
 
@@ -523,5 +612,51 @@ mod test {
             )
             .expect("expected successful migration")
         );
+    }
+
+    /// Rewrites `"Error"` to `"error"` on a four-segment path. These assertions are deliberately
+    /// explicit rather than insta snapshots, so a regression can't be blessed away by accepting a
+    /// new snapshot.
+    fn change_jwt_on_error(source: Value) -> Value {
+        apply_migration(
+            &source,
+            &Migration::builder()
+                .action(Action::Change {
+                    path: "authentication.router.jwt.on_error".to_string(),
+                    from: Value::String("Error".into()),
+                    to: Value::String("error".into()),
+                })
+                .description("rename a deeply nested value")
+                .build(),
+        )
+        .expect("expected successful migration")
+    }
+
+    /// `Change` used to compare the current value with a `$[?(@.a.b == x)]` filter, which matches
+    /// nothing once the path is more than two segments deep. Any migration rewriting a value on a
+    /// deeply nested path was silently a no-op — this asserts it isn't.
+    #[test]
+    fn change_field_deeply_nested() {
+        assert_eq!(
+            change_jwt_on_error(
+                json!({"authentication": {"router": {"jwt": {"on_error": "Error"}}}})
+            ),
+            json!({"authentication": {"router": {"jwt": {"on_error": "error"}}}})
+        );
+    }
+
+    /// Guards the other direction: `from` must still be honoured at depth, so a non-matching value
+    /// is left alone rather than rewritten unconditionally.
+    #[test]
+    fn change_field_deeply_nested_only_matching_value() {
+        let source = json!({"authentication": {"router": {"jwt": {"on_error": "Continue"}}}});
+        assert_eq!(change_jwt_on_error(source.clone()), source);
+    }
+
+    /// A `Change` on a path that isn't present must not create it.
+    #[test]
+    fn change_field_deeply_nested_absent_path() {
+        let source = json!({"authentication": {"router": {"jwt": {}}}});
+        assert_eq!(change_jwt_on_error(source.clone()), source);
     }
 }

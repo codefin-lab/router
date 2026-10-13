@@ -182,7 +182,9 @@ impl InstrumentData {
         );
         populate_config_instrument!(
             apollo.router.config.authentication.jwt,
-            "$.authentication[?(@..jwt)]"
+            "$.authentication[?(@..jwt)]",
+            opt.on_error,
+            "$.router.jwt.on_error"
         );
         populate_config_instrument!(
             apollo.router.config.authentication.aws.sigv4,
@@ -244,7 +246,9 @@ impl InstrumentData {
             opt.max_opened,
             "$[?(@.max_opened_subscriptions)]",
             opt.queue_capacity,
-            "$[?(@.queue_capacity)]"
+            "$[?(@.queue_capacity)]",
+            opt.reconnect,
+            "$.mode.passthrough..max_reconnect_attempts[?(@ > 0)]"
         );
 
         populate_config_instrument!(
@@ -405,7 +409,9 @@ impl InstrumentData {
             opt.limits.max_file_size,
             "$.limits.max_file_size",
             opt.limits.max_files,
-            "$.limits.max_files"
+            "$.limits.max_files",
+            opt.limits.max_overhead_size,
+            "$.limits.max_overhead_size"
         );
 
         populate_config_instrument!(
@@ -466,6 +472,101 @@ impl InstrumentData {
             "$[?(@.subgraphs..sources..override_url)]",
             opt.source.max_requests_per_operation,
             "$[?(@.subgraphs..sources..max_requests_per_operation)]"
+        );
+
+        populate_config_instrument!(
+            apollo.router.config.experimental_chaos,
+            "$.experimental_chaos[?(@.force_schema_reload || @.force_config_reload)]"
+        );
+
+        populate_config_instrument!(
+            apollo.router.config.experimental_type_conditioned_fetching,
+            "$.experimental_type_conditioned_fetching[?(@==true)]"
+        );
+
+        populate_config_instrument!(
+            apollo.router.config.experimental_hoist_orphan_errors,
+            "$.experimental_hoist_orphan_errors[?(@.all.enabled==true || @.subgraphs..enabled==true)]"
+        );
+
+        populate_config_instrument!(
+            apollo.router.config.experimental_log_on_broken_pipe,
+            "$.supergraph.experimental_log_on_broken_pipe[?(@==true)]"
+        );
+
+        populate_config_instrument!(
+            apollo.router.config.experimental_plans_limit,
+            "$.supergraph.query_planning.experimental_plans_limit"
+        );
+
+        populate_config_instrument!(
+            apollo.router.config.experimental_paths_limit,
+            "$.supergraph.query_planning.experimental_paths_limit"
+        );
+
+        populate_config_instrument!(
+            apollo.router.config.experimental_reuse_query_plans,
+            "$.supergraph.query_planning.experimental_reuse_query_plans[?(@==true)]"
+        );
+
+        populate_config_instrument!(
+            apollo.router.config.experimental_cooperative_cancellation,
+            "$.supergraph.query_planning.experimental_cooperative_cancellation"
+        );
+
+        populate_config_instrument!(
+            apollo.router.config.experimental_prewarm_query_plan_cache,
+            "$.persisted_queries.experimental_prewarm_query_plan_cache[?(@.on_startup==true)]"
+        );
+
+        populate_config_instrument!(
+            apollo.router.config.experimental_local_field_metrics,
+            "$.telemetry.apollo.experimental_local_field_metrics[?(@==true)]"
+        );
+
+        populate_config_instrument!(
+            apollo.router.config.experimental_response_trace_id,
+            "$.telemetry.exporters.tracing.experimental_response_trace_id[?(@.enabled==true)]"
+        );
+
+        populate_config_instrument!(
+            apollo.router.config.experimental_otlp_endpoint,
+            "$.telemetry.apollo.experimental_otlp_endpoint"
+        );
+
+        populate_config_instrument!(
+            apollo.router.config.experimental_http2,
+            "$.traffic_shaping[?(@.all.experimental_http2 == 'enable' || @.all.experimental_http2 == 'http2only' || @.subgraphs..experimental_http2 == 'enable' || @.subgraphs..experimental_http2 == 'http2only')]"
+        );
+
+        populate_config_instrument!(
+            apollo.router.config.experimental_http2_keep_alive_interval,
+            "$..experimental_http2_keep_alive_interval"
+        );
+
+        populate_config_instrument!(
+            apollo.router.config.experimental_http2_keep_alive_timeout,
+            "$..experimental_http2_keep_alive_timeout"
+        );
+
+        populate_config_instrument!(
+            apollo.router.config.experimental_otlp_tracing_protocol,
+            "$.telemetry.apollo.experimental_otlp_tracing_protocol"
+        );
+
+        populate_config_instrument!(
+            apollo.router.config.experimental_otlp_metrics_protocol,
+            "$.telemetry.apollo.experimental_otlp_metrics_protocol"
+        );
+
+        populate_config_instrument!(
+            apollo.router.config.experimental_mock_subgraphs,
+            "$.experimental_mock_subgraphs"
+        );
+
+        populate_config_instrument!(
+            apollo.router.config.experimental_expose_query_plan,
+            "$.plugins[?(@['experimental.expose_query_plan']==true)]"
         );
 
         // We need to update the entry we just made because the selected strategy is a named object in the config.

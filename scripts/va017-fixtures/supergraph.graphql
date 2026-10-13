@@ -1,0 +1,35 @@
+schema @link(url: "https://specs.apollo.dev/link/v1.0") @link(url: "https://specs.apollo.dev/join/v0.3", for: EXECUTION) { query: Query mutation: Mutation subscription: Subscription }
+directive @link(url: String, as: String, for: link__Purpose, import: [link__Import]) repeatable on SCHEMA
+directive @join__graph(name: String!, url: String!) on ENUM_VALUE
+directive @join__implements(graph: join__Graph!, interface: String!) repeatable on OBJECT | INTERFACE
+directive @join__unionMember(graph: join__Graph!, member: String!) repeatable on UNION
+directive @join__enumValue(graph: join__Graph!) repeatable on ENUM_VALUE
+directive @join__type(graph: join__Graph!, key: join__FieldSet, extension: Boolean! = false, resolvable: Boolean! = true, isInterfaceObject: Boolean! = false) repeatable on OBJECT | INTERFACE | UNION | ENUM | INPUT_OBJECT | SCALAR
+directive @join__field(graph: join__Graph, requires: join__FieldSet, provides: join__FieldSet, type: String, external: Boolean, override: String, usedOverridden: Boolean) repeatable on FIELD_DEFINITION | INPUT_FIELD_DEFINITION
+scalar link__Import
+scalar join__FieldSet
+enum link__Purpose { SECURITY EXECUTION }
+enum join__Graph {
+  LEFT @join__graph(name: "left", url: "http://mock:8080/left")
+  RIGHT @join__graph(name: "right", url: "http://mock:8080/right")
+}
+type Query @join__type(graph: LEFT) @join__type(graph: RIGHT) {
+  left: String @join__field(graph: LEFT)
+  right: String @join__field(graph: RIGHT)
+  account: Account @join__field(graph: LEFT)
+}
+type Account @join__type(graph: LEFT, key: "id") @join__type(graph: RIGHT, key: "id") {
+  id: ID!
+  label: String @join__field(graph: RIGHT)
+}
+scalar Upload @join__type(graph: LEFT)
+type Mutation @join__type(graph: LEFT) {
+  upload(files: [Upload!]!): String @join__field(graph: LEFT)
+}
+type Subscription @join__type(graph: RIGHT) {
+  notificationReceived: Notification @join__field(graph: RIGHT)
+}
+type Notification @join__type(graph: RIGHT) {
+  id: ID!
+  message: String!
+}

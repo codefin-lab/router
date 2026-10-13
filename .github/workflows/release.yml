@@ -5,6 +5,10 @@ on:
     tags:
       - "v*"
 
+concurrency:
+  group: router-image-release
+  cancel-in-progress: false
+
 permissions:
   contents: read
   packages: write
@@ -14,14 +18,36 @@ env:
   IMAGE_NAME: codefin-lab/router
 
 jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Reject existing release tags and reruns
+        run: python3 scripts/va017_release_guard.py "$GITHUB_REF_NAME"
   release-docker:
+    needs: preflight
     name: Build & Push Docker Image
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 (Node.js 24)
 
+      - name: Reject partial release rerun
+        run: test "$GITHUB_RUN_ATTEMPT" = 1
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -29,23 +55,142 @@ jobs:
 
       - name: Extract version
         id: version
-        run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-
-      - name: Set up QEMU (for multi-platform builds)
-        uses: docker/setup-qemu-action@v3
+        run: echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - name: Build and push Docker image (amd64 + arm64)
-        uses: docker/build-push-action@v6
+      - name: Build and push native platform image
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: dockerfiles/diy/dockerfiles/Dockerfile.repo
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/${{ matrix.arch }}
           push: true
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.tag }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          build-args: |
+            VCS_REF=${{ github.sha }}
+            IMAGE_VERSION=${{ steps.version.outputs.tag }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }}
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-${{ matrix.arch }},mode=max
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.tag }}-${{ matrix.arch }}
+      - name: Record published identity
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          mkdir -p security-reports
+          printf '%s@%s\n' "$REGISTRY/$IMAGE_NAME" "$DIGEST" > security-reports/published-image.txt
+          git rev-parse HEAD > security-reports/source-commit.txt
+          date -u +%FT%TZ > security-reports/scanned-at.txt
+          docker pull "$REGISTRY/$IMAGE_NAME@$DIGEST"
+          docker image inspect "$REGISTRY/$IMAGE_NAME@$DIGEST" > security-reports/image-inspect.json
+          python3 scripts/va017_runtime_evidence.py security-reports/image-inspect.json "$GITHUB_SHA" "$GITHUB_REF_NAME"
+          docker run --rm "$REGISTRY/$IMAGE_NAME@$DIGEST" --version | tee security-reports/version.txt
+          grep -F '2.18.0' security-reports/version.txt
+          docker buildx imagetools inspect "$REGISTRY/$IMAGE_NAME@$DIGEST" --raw > security-reports/manifest.json
+      - name: Test published container with synthetic subgraphs
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: python3 scripts/va017_container_smoke.py "$REGISTRY/$IMAGE_NAME@$DIGEST" security-reports
+      - name: Scan published digest
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.75.0
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          scanners: vuln
+          format: json
+          output: security-reports/candidate.json
+          list-all-pkgs: 'true'
+          ignore-unfixed: 'false'
+          exit-code: '0'
+          timeout: 15m
+      - name: Compare old image and retain SBOM
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          SCAN_ARCH: ${{ matrix.arch }}
+        run: |
+          if [ "$SCAN_ARCH" = arm64 ]; then
+            trivy image --platform linux/arm64 --skip-db-update --scanners vuln --list-all-pkgs --format json --output security-reports/baseline.json docker.io/codefin/router@sha256:9a79fca41eae439c82e8feaa9a91639a9f8001a647e8516bb42409505eff4d71
+          fi
+          trivy version --format json > security-reports/scanner.json
+          trivy image --skip-db-update --format cyclonedx --output security-reports/image.cdx.json "$REGISTRY/$IMAGE_NAME@$DIGEST"
+          python3 scripts/va017_scan_summary.py security-reports
+          echo 'Publication evidence only: review residuals and update the PR before consumer promotion. No latest tag is changed.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Retain published evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: published-evidence-${{ matrix.arch }}-${{ github.sha }}
+          path: security-reports/
+          if-no-files-found: error
+          retention-days: 90
+  assemble-version:
+    outputs:
+      digest: ${{ steps.index.outputs.digest }}
+    needs: release-docker
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Recheck final version is absent
+        run: python3 scripts/va017_release_guard.py "$GITHUB_REF_NAME" --index-only
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: published-evidence-*
+          path: evidence
+      - name: Assemble only scanned platform digests
+        id: index
+        run: |
+          mapfile -t images < <(cat evidence/*/published-image.txt)
+          test "${#images[@]}" -eq 2
+          for image in "${images[@]}"; do
+            [[ "$image" =~ ^ghcr.io/codefin-lab/router@sha256:[0-9a-f]{64}$ ]]
+          done
+          docker buildx imagetools create --tag "$REGISTRY/$IMAGE_NAME:$GITHUB_REF_NAME" "${images[@]}"
+          docker buildx imagetools inspect "$REGISTRY/$IMAGE_NAME:$GITHUB_REF_NAME" | tee published-index.txt
+          digest="$(docker buildx imagetools inspect "$REGISTRY/$IMAGE_NAME:$GITHUB_REF_NAME" --format '{{.Manifest.Digest}}')"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          cat published-index.txt >> "$GITHUB_STEP_SUMMARY"
+          echo 'Version index contains scanned platform digests. Human residual review and PR comparison remain required before deployment; latest is unchanged.' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: published-index-${{ github.sha }}
+          path: published-index.txt
+          if-no-files-found: error
+          retention-days: 90
+
+  verify-public-pull:
+    name: Verify anonymous pull (${{ matrix.arch }})
+    needs: assemble-version
+    permissions: {}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - name: Pull published index without registry credentials
+        env:
+          DIGEST: ${{ needs.assemble-version.outputs.digest }}
+          SCAN_ARCH: ${{ matrix.arch }}
+        run: |
+          anonymous_config="$(mktemp -d)"
+          trap 'rm -rf "$anonymous_config"' EXIT
+          printf '{"auths":{}}\n' > "$anonymous_config/config.json"
+          image="$REGISTRY/$IMAGE_NAME@$DIGEST"
+          docker --config "$anonymous_config" pull --platform "linux/$SCAN_ARCH" "$image"
+          test "$(docker image inspect "$image" --format '{{.Architecture}}')" = "$SCAN_ARCH"
+          docker --config "$anonymous_config" run --rm --pull=never "$image" --version | tee version.txt
+          grep -F '2.18.0' version.txt
+          printf 'Anonymous pull and version check passed: %s on linux/%s\n' "$image" "$SCAN_ARCH" >> "$GITHUB_STEP_SUMMARY"

@@ -85,13 +85,38 @@ async fn find_redis_key_matching(
     all_keys.into_iter().next()
 }
 
-/// Find a key matching the pattern that is not equal to `exclude_key`.
-/// Used when multiple keys match the same pattern and we need a different one (e.g. a second entity cache key).
-async fn find_redis_key_matching_different_from(
+/// Scan for all keys matching the pattern and return them as a sorted Vec.
+async fn find_all_redis_keys_matching(
     client: &RedisClient,
     namespace: &str,
     pattern: &str,
-    exclude_key: &str,
+) -> Vec<String> {
+    let full_pattern = format!("{namespace}:{pattern}");
+    let mut scanner = client.scan(&full_pattern, Some(100), Some(ScanType::String));
+    let mut all_keys = Vec::new();
+
+    while let Some(result) = scanner.next().await {
+        if let Ok(ref scan_result) = result
+            && let Some(keys) = scan_result.results()
+        {
+            for key in keys {
+                if let Some(s) = key.as_str() {
+                    all_keys.push(s.to_string());
+                }
+            }
+        }
+    }
+    all_keys.sort();
+    all_keys
+}
+
+/// Find a key matching the pattern that is NOT in `exclude_keys`.
+/// This is deterministic even when Redis SCAN returns keys in arbitrary order (e.g. Redis 7.4.9+).
+async fn find_redis_key_matching_not_in(
+    client: &RedisClient,
+    namespace: &str,
+    pattern: &str,
+    exclude_keys: &[String],
 ) -> Option<String> {
     let full_pattern = format!("{namespace}:{pattern}");
     let mut scanner = client.scan(&full_pattern, Some(100), Some(ScanType::String));
@@ -109,7 +134,7 @@ async fn find_redis_key_matching_different_from(
         }
     }
     all_keys.sort();
-    all_keys.into_iter().find(|k| k != exclude_key)
+    all_keys.into_iter().find(|k| !exclude_keys.contains(k))
 }
 
 fn make_redis_url(ports: &[&str]) -> Option<String> {
@@ -518,7 +543,7 @@ async fn entity_cache_basic() -> Result<(), BoxError> {
                         "redis": {
                             "urls": [redis_url],
                             "namespace": namespace,
-                            "ttl": "2s",
+                            "ttl": "60s",
                             "required_to_start": true,
                             "pool_size": 3
                         },
@@ -530,7 +555,7 @@ async fn entity_cache_basic() -> Result<(), BoxError> {
                         },
                         "reviews": {
                             "enabled": true,
-                            "ttl": "10s"
+                            "ttl": "60s"
                         }
                     }
                 }
@@ -585,6 +610,16 @@ async fn entity_cache_basic() -> Result<(), BoxError> {
     .expect("reviews cache key should exist");
     let v: Value = client.get(&reviews_key).await.unwrap();
     insta::assert_json_snapshot!(v.as_object().unwrap().get("data").unwrap());
+
+    // Snapshot the set of reviews entity keys known before the second request so we can
+    // deterministically identify the new key added by the second request even if Redis SCAN
+    // returns keys in a different order (Redis 7.4.9 changed SCAN ordering).
+    let known_reviews_keys = find_all_redis_keys_matching(
+        &client,
+        &namespace,
+        "version:*:subgraph:reviews:type:Product:*",
+    )
+    .await;
 
     // we abuse the query shape to return a response with a different but overlapping set of entities
     let mut subgraphs = MockedSubgraphs::default();
@@ -650,7 +685,7 @@ async fn entity_cache_basic() -> Result<(), BoxError> {
                             "urls": [redis_url],
                             "namespace": namespace,
                             "required_to_start": true,
-                            "ttl": "2s"
+                            "ttl": "60s"
                         },
                     },
                     "subgraphs": {
@@ -660,7 +695,7 @@ async fn entity_cache_basic() -> Result<(), BoxError> {
                         },
                         "reviews": {
                             "enabled": true,
-                            "ttl": "10s"
+                            "ttl": "60s"
                         }
                     }
                 }
@@ -695,12 +730,14 @@ async fn entity_cache_basic() -> Result<(), BoxError> {
         .unwrap();
     insta::assert_json_snapshot!(response);
 
-    // Find a different reviews entity key than the first (the second request fetched entity for product 3)
-    let reviews_key_2 = find_redis_key_matching_different_from(
+    // Find a reviews entity key added by the second request (for product 3), excluding all keys
+    // that existed before it ran. Using an exclusion set rather than a single exclude_key makes
+    // this deterministic under Redis 7.4.9+'s changed SCAN ordering.
+    let reviews_key_2 = find_redis_key_matching_not_in(
         &client,
         &namespace,
         "version:*:subgraph:reviews:type:Product:*",
-        &reviews_key,
+        &known_reviews_keys,
     )
     .await
     .expect("second reviews entity cache key should exist");
@@ -724,7 +761,7 @@ async fn entity_cache_basic() -> Result<(), BoxError> {
                             "urls": [redis_url],
                             "namespace": namespace,
                             "required_to_start": true,
-                            "ttl": "2s"
+                            "ttl": "60s"
                         },
                         "invalidation": {
                             "enabled": true,
@@ -742,7 +779,7 @@ async fn entity_cache_basic() -> Result<(), BoxError> {
                         },
                         "reviews": {
                             "enabled": true,
-                            "ttl": "10s",
+                            "ttl": "60s",
                             "invalidation": {
                                 "enabled": true,
                                 "shared_key": SECRET_SHARED_KEY
@@ -1820,6 +1857,57 @@ async fn test_redis_uses_replicas_when_clustered() {
     router.assert_metrics_does_not_contain(parse_error).await;
 }
 
+/// A clustered router must keep its eager replica connections warm by PINGing them, otherwise a
+/// server-side idle timeout reaps them and triggers a self-sustaining pool-reconnect loop (RH-1402,
+/// regression from #9589's switch to eager `lazy_connections = false`). We assert the keep-alive
+/// PING actually reaches replica nodes; the sentinel argument attributes the PING to the router so
+/// unrelated PINGs (e.g. container health probes) can't cause a false pass. Before the fix the
+/// router never pinged replicas, so this PING is absent.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_redis_pings_replicas_to_keep_them_alive_when_clustered() {
+    if !graph_os_enabled() {
+        return;
+    }
+
+    let namespace = Uuid::new_v4().to_string();
+    let redis_monitor = RedisMonitor::new(&REDIS_CLUSTER_PORTS).await;
+
+    let router_config = include_str!("fixtures/clustered_redis_query_planning.router.yaml");
+    let mut router = IntegrationTest::builder()
+        .config(router_config)
+        .redis_namespace(&namespace)
+        .build()
+        .await;
+
+    router.start().await;
+    router.assert_started().await;
+
+    // Establish the redis connection pool, including the replica connections.
+    router.execute_several_default_queries(2).await;
+
+    // The replica keep-alive fires one heartbeat interval (REDIS_HEARTBEAT_INTERVAL, 10s in
+    // `cache::redis`) after the pool is created, matching fred's primary heartbeat. Block until it
+    // reaches a replica (panics if it never does).
+    let sentinel = "apollo-router-replica-heartbeat";
+    redis_monitor
+        .wait_for(std::time::Duration::from_secs(30), |output| {
+            output
+                .replicas(true)
+                .command_with_arg_sent_to_any("PING", sentinel)
+        })
+        .await;
+
+    // The keep-alive is replica-only; primaries already get fred's built-in heartbeat. Check that
+    // against the final drained output.
+    let redis_monitor_output = redis_monitor.collect().await;
+    assert!(
+        !redis_monitor_output
+            .replicas(false)
+            .command_with_arg_sent_to_any("PING", sentinel),
+        "replica keep-alive PING should not target primary nodes"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_redis_doesnt_use_replicas_in_standalone_mode() {
     if !graph_os_enabled() {
@@ -1846,6 +1934,18 @@ async fn test_redis_doesnt_use_replicas_in_standalone_mode() {
         .assert_metrics_contains(expected_metric, Some(std::time::Duration::from_secs(30)))
         .await;
 
+    // Snapshot the redis error counters BEFORE issuing queries. fred can emit transient IO
+    // events to its `error_rx` channel while the pool is still stabilising its initial
+    // connections (every event there is counted by `record_redis_error`), and those counter
+    // increments are independent of whether the router's actual query-time operations
+    // succeed. Asserting "metric not present" is therefore racy. We instead diff the
+    // counters across the query phase so we only fail if a NEW error is recorded while
+    // queries are being served.
+    let io_error = r#"apollo_router_cache_redis_errors_total{error_type="io",kind="query planner",otel_scope_name="apollo/router"}"#;
+    let parse_error = r#"apollo_router_cache_redis_errors_total{error_type="parse",kind="query planner",otel_scope_name="apollo/router"}"#;
+    let io_error_before = router.read_metric_counter_value(io_error).await;
+    let parse_error_before = router.read_metric_counter_value(parse_error).await;
+
     // send a few different queries to ensure a redis cache hit; if you just send 1, it'll only hit
     // the in-memory cache
     let responses = router.execute_several_default_queries(2).await;
@@ -1854,14 +1954,20 @@ async fn test_redis_doesnt_use_replicas_in_standalone_mode() {
         eprintln!("{r:?}");
     }
 
-    // check that there were no I/O errors
-    let io_error = r#"apollo_router_cache_redis_errors_total{error_type="io",kind="query planner",otel_scope_name="apollo/router"}"#;
-    router.assert_metrics_does_not_contain(io_error).await;
+    // No NEW I/O errors should be recorded while serving queries.
+    let io_error_after = router.read_metric_counter_value(io_error).await;
+    assert_eq!(
+        io_error_after, io_error_before,
+        "redis IO error counter increased during query execution ({io_error_before} -> {io_error_after}); '{io_error}'"
+    );
 
-    // check that there were no parse errors; these might show up when fred can't read the cluster
-    // state properly
-    let parse_error = r#"apollo_router_cache_redis_errors_total{error_type="parse",kind="query planner",otel_scope_name="apollo/router"}"#;
-    router.assert_metrics_does_not_contain(parse_error).await;
+    // No NEW parse errors either; these might show up when fred can't read the cluster
+    // state properly.
+    let parse_error_after = router.read_metric_counter_value(parse_error).await;
+    assert_eq!(
+        parse_error_after, parse_error_before,
+        "redis parse error counter increased during query execution ({parse_error_before} -> {parse_error_after}); '{parse_error}'"
+    );
 
     let redis_monitor_output = redis_monitor.collect().await.namespaced(&namespace);
     assert_eq!(redis_monitor_output.num_nodes(), 1);
@@ -2063,6 +2169,25 @@ async fn test_redis_in_standalone_mode_for_mgets() {
     router.start().await;
     router.assert_started().await;
 
+    // Allow time for the Redis pool to register both clients (pool_size: 2) before
+    // snapshotting error counters. fred can emit transient IO events to its `error_rx`
+    // channel while the pool is still stabilising its initial connections (every event
+    // there is counted by `record_redis_error`), so we must wait for the pool to settle.
+    let expected_metric = r#"apollo_router_cache_redis_clients{otel_scope_name="apollo/router"} 2"#;
+    router
+        .assert_metrics_contains(expected_metric, Some(std::time::Duration::from_secs(30)))
+        .await;
+
+    // Snapshot the redis error counters BEFORE issuing queries. Any transient IO/parse
+    // events recorded during pool warmup are independent of whether the router's actual
+    // query-time operations succeed. Asserting "metric not present" on a cumulative
+    // counter is therefore racy. We instead diff the counters across the query phase so
+    // we only fail if a NEW error is recorded while queries are being served.
+    let io_error = r#"apollo_router_cache_redis_errors_total{error_type="io",kind="response-cache",otel_scope_name="apollo/router"}"#;
+    let parse_error = r#"apollo_router_cache_redis_errors_total{error_type="parse",kind="response-cache",otel_scope_name="apollo/router"}"#;
+    let io_error_before = router.read_metric_counter_value(io_error).await;
+    let parse_error_before = router.read_metric_counter_value(parse_error).await;
+
     // send a few different queries to ensure a redis cache hit
     let mut join_set = JoinSet::new();
     for _ in 0..5 {
@@ -2081,16 +2206,22 @@ async fn test_redis_in_standalone_mode_for_mgets() {
     assert_eq!(redis_monitor_output.num_nodes(), 1);
     assert!(redis_monitor_output.command_sent_to_any("MGET"));
 
-    // check that there were no I/O errors
-    let io_error = r#"apollo_router_cache_redis_errors_total{error_type="io",kind="response-cache",otel_scope_name="apollo/router"}"#;
-    router.assert_metrics_does_not_contain(io_error).await;
+    // No NEW I/O errors should be recorded while serving queries.
+    let io_error_after = router.read_metric_counter_value(io_error).await;
+    assert_eq!(
+        io_error_after, io_error_before,
+        "redis IO error counter increased during query execution ({io_error_before} -> {io_error_after}); '{io_error}'"
+    );
 
-    // check that there were no parse errors; parse errors happen whenever a response from redis to
+    // No NEW parse errors either; parse errors happen whenever a response from redis to
     // fred can't be understood by fred, which can be redis config issues, type conversion
     // shenanigans, or things like being in the middle of a transaction (pipeline) and trying to
     // convert a value
-    let parse_error = r#"apollo_router_cache_redis_errors_total{error_type="parse""#;
-    router.assert_metrics_does_not_contain(parse_error).await;
+    let parse_error_after = router.read_metric_counter_value(parse_error).await;
+    assert_eq!(
+        parse_error_after, parse_error_before,
+        "redis parse error counter increased during query execution ({parse_error_before} -> {parse_error_after}); '{parse_error}'"
+    );
 
     // Use pattern matching instead of hardcoded hash to be resilient to hash changes
     router

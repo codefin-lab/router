@@ -1,6 +1,7 @@
 # VA-017 fork regression coverage
 
-This first test change runs against the current 2.14.0-derived fork. It does not
+This records the historical PR #1 test baseline against the 2.14.0-derived fork.
+For the subsequent candidate, see [the 2.18.0 upgrade](upgrade-2.18.0.md). It does not
 upgrade or release an image and does not certify all differences as intentional.
 
 ## Baseline

@@ -134,9 +134,17 @@ impl Service<SupergraphRequest> for SupergraphService {
             self.strict_variable_validation,
         )
         .or_else(|error: BoxError| async move {
+            // Any error reaching this catch-all is an unhandled internal failure: every
+            // client-actionable error is already returned as an `Ok` response upstream in
+            // `service_call`. Log the detail for operators, but do not put it in the response
+            // as it could leak internal information (e.g. query planner internals) to the
+            // caller. This mirrors `internal_server_error` in the axum factory, but we don't
+            // just return Err to trigger that because it would skip plugins/coprocessors
+            // (including telemetry), and that would break backwards compatibility.
+            tracing::error!(code = "INTERNAL_SERVER_ERROR", err = %error);
             let errors = vec![
                 crate::error::Error::builder()
-                    .message(error.to_string())
+                    .message("internal server error")
                     .extension_code("INTERNAL_SERVER_ERROR")
                     .build(),
             ];
@@ -375,9 +383,15 @@ async fn service_call(
                 match supergraph_response_event {
                     Some(supergraph_response_event) => {
                         let mut attrs = Vec::with_capacity(4);
+                        let header_string = crate::services::header_masking::masked_headers_for_log(
+                            &context,
+                            crate::services::header_masking::Direction::Response,
+                            None,
+                            &parts.headers,
+                        );
                         attrs.push(KeyValue::new(
                             Key::from_static_str("http.response.headers"),
-                            opentelemetry::Value::String(format!("{:?}", parts.headers).into()),
+                            opentelemetry::Value::String(header_string.into()),
                         ));
                         attrs.push(KeyValue::new(
                             Key::from_static_str("http.response.status"),

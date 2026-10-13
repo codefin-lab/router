@@ -11,13 +11,13 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 (Node.js 24)
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.95.0"
+          toolchain: "1.97.1"
           components: rustfmt
 
       - uses: Swatinem/rust-cache@v2
@@ -31,13 +31,13 @@ jobs:
         run: cargo build --locked -p apollo-router --release
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 (Node.js 24)
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.95.0"
+          toolchain: "1.97.1"
           components: rustfmt
 
       - uses: Swatinem/rust-cache@v2
@@ -51,6 +51,9 @@ jobs:
         run: |
           sudo apt-get install -y libdw-dev pkg-config
           pkg-config --modversion libdw
+
+      - name: Release evidence guard tests
+        run: python3 -m unittest discover -s scripts -p 'test_va017*.py' -v
 
       - name: Fork regression test discovery
         run: |
@@ -72,3 +75,28 @@ jobs:
       - name: HTTP factory tests
         if: ${{ !cancelled() }}
         run: cargo test --locked -p apollo-router --lib axum_http_server_factory
+
+      - name: Gateway compatibility tests
+        if: ${{ !cancelled() }}
+        run: |
+          cargo test --locked -p apollo-router --lib -- --list > /tmp/router-tests.txt
+          for suite in feature_gate_enforcement plugins::authentication plugins::authorization plugins::subscription file_uploads services::hickory_dns_connector services::http::service plugins::telemetry::reload plugins::rhai services::supergraph protocols::websocket services::subgraph_service; do
+            grep -F "$suite" /tmp/router-tests.txt | grep -q ': test$'
+            cargo test --locked -p apollo-router --lib "$suite"
+          done
+
+      - name: Upload HTTP integration tests
+        if: ${{ !cancelled() }}
+        run: |
+          cargo test --locked -p apollo-router --test integration_tests integration::file_upload::it_ -- --list > /tmp/upload-tests.txt
+          test "$(grep -c ': test$' /tmp/upload-tests.txt)" -ge 18
+          cargo test --locked -p apollo-router --test integration_tests integration::file_upload::it_ -- --nocapture 2>&1 | tee /tmp/upload-results.txt
+          test "$(grep -c 'VA017_UPLOAD_VALIDATED' /tmp/upload-results.txt)" -ge 18
+
+      - name: Security backport HTTP integration tests
+        if: ${{ !cancelled() }}
+        run: |
+          cargo test --locked -p apollo-router --test integration_tests internal_query_planner_error_is_redacted_from_client_response
+          cargo test --locked -p apollo-router --test integration_tests client_errors_omit_rhai
+          cargo test --locked -p apollo-router --test integration_tests cancelled_by_rhai
+          cargo test --locked -p apollo-router --test integration_tests integration::query_planner::fed2_schema_with_new_qp
